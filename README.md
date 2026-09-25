@@ -1,85 +1,148 @@
-# Housebook: AI-Powered Personal Finance
+# Housebook
 
-Housebook is a proactive, local-first financial assistant. It evolves the traditional expense tracker into an intelligent system that discovers life events, learns from user behavior, and maintains a clean separation between raw data and categorization intelligence.
+**Housebook turns your household's paperwork into a private ledger on
+your own computer.** You hand it card statements, Amazon order exports,
+tax forms and medical receipts. It gives you a dashboard of where the
+money went, what each trip cost, and which medical bills you can still
+reimburse from your HSA. The paperwork itself is done by an AI coding
+agent, such as Claude Code or Gemini CLI, working in this repository.
 
-## 🌟 Key Features
-- **Hybrid Audit Loop**: All new data is imported into a "Pending Review" state. Your AI coding agent (e.g. Claude Code or Gemini CLI) or the Dashboard is used to refine and verify transactions.
-- **Proactive Life Events**: Automatically clusters travel, dining, and transit into "Trips" while surgically excluding routine local spending.
-- **Continuous Learning**: User corrections are saved as optimized keywords in the database and periodically backed up to `config/rules.json`.
-- **Privacy First**: The code and dashboard run locally, and the ledger lives in a workspace outside the repository. The code makes no LLM API calls. The AI agent that imports and audits documents does read them, so their contents reach whichever LLM provider runs that agent. The optional rclone sync talks only to the storage remote you configure.
+![The Spending dashboard: trip cards, totals and charts for the demo family](docs/screenshots/spending.webp)
 
-## 🛠 Setup & Bootstrapping
-1. **System Requirements**: Ensure `poppler-utils` (for `pdftotext`), `sqlite3`, and `direnv` (recommended) are installed.
-2. **Workspace**: Create a directory **outside this repository** for your financial data, and set `HOUSEBOOK_WORKSPACE_DIR` to it in `.env` (copy `.env.example`). There is no default. Every command refuses to run until the workspace is set and exists.
-3. **Bootstrap**: Run the automated setup script to create the virtual environment and initialize the database:
-   ```bash
-   ./bootstrap.sh
-   ```
-4. **Shell Integration**: If using `direnv`, allow it once:
-   ```bash
-   direnv allow
-   ```
+## What it does
 
-## 🚀 Workflow
-1. **Check coverage**: See which statements are already ingested and spot gaps:
-   ```bash
-   housebook-ingest list --latest
-   ```
-2. **Import & Ingest**: Import new statements via the per-source CLIs:
-   ```bash
-   housebook-amazon import ~/Downloads/Amazon-Data-Export.zip --profile <name>
-   housebook-amazon ingest
-   housebook-cc ingest          # After PDF import + sidecar creation
-   ```
-3. **Audit** (mandatory): Run the monthly audit SOP with the AI Agent to verify and categorize all `UNVERIFIED` transactions. See `prompts/monthly_audit.md`.
-4. **Dashboard**: Launch the live interactive UI (FastAPI + Jinja2 + Vue.js):
-   ```bash
-   housebook-app          # http://127.0.0.1:8000
-   ```
-   The **Help** button in the dashboard header slides in a guide to
-   what each page is for, opened at the topic for the page you are on,
-   without leaving that page.
-   A normal local launch has authentication disabled and is deliberately
-   limited to loopback. The launcher rejects non-loopback binds. The app
-   also has a fail-closed authenticated-proxy mode for the planned LAN
-   deployment, but setting its environment variables alone does not
-   publish a supported service: keep Uvicorn on loopback until the TLS
-   proxy and the remaining release gates in
-   `docs/architecture/tax-security-roadmap.md` are configured and
-   verified.
-   The repository-side Google OAuth/Caddy profile and its live rollout
-   checklist are in [`deploy/lan/README.md`](deploy/lan/README.md).
-   That profile can preserve account-free access at
-   `http://localhost:8000` on the server itself while requiring Google
-   authentication for every request through the LAN hostname.
-   Dashboard CSS and JavaScript are packaged locally, so routine use
-   makes no CDN or font-service requests and works without internet
-   access.
+- **Spending.** Every charge from your cards, bank and Amazon, sorted
+  into categories. Totals leave out what isn't really spending: card
+  payments, and purchases you returned for a full refund.
+- **Trips.** Groups everything one journey cost, including the flight
+  you booked two months earlier, but not the groceries you bought at
+  home while you were away.
+- **HSA shoebox.** Keeps proof for every medical bill you paid out of
+  pocket, so you can pay yourself back from your HSA tax-free, even
+  years later. Each expense shows how strong its proof is.
+- **Income & tax.** Collects each year's W-2s, 1099s and 1098s, and
+  estimates your federal tax.
+- **Projects and manual expenses.** Tracks a renovation against its
+  budget, and records costs that never show up on a statement, like
+  cash paid to a contractor.
 
-## 🧪 Demo Environment
-For evaluation and development without private data, the project includes a high-fidelity demo generator:
+Housebook is built around a US household's paperwork. The tax page
+also handles Brazilian income for people who file in both countries.
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/trip.webp" alt="A two-week Italy vacation: total, cost per day, spending by category and by day"></td>
+    <td><img src="docs/screenshots/hsa.webp" alt="The HSA shoebox: medical expenses with Ironclad, Ready, Weak and Stub proof levels"></td>
+  </tr>
+  <tr>
+    <td align="center">What a vacation really cost</td>
+    <td align="center">Medical expenses and how well each is documented</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/hsa-evidence.webp" alt="An insurance statement opened from an HSA expense"></td>
+    <td><img src="docs/screenshots/help.webp" alt="The help drawer open over the trip page"></td>
+  </tr>
+  <tr>
+    <td align="center">The documents behind each medical expense</td>
+    <td align="center">Built-in help for every page</td>
+  </tr>
+</table>
+
+Every name and number in these screenshots is invented.
+
+## How it works
+
+You don't type transactions in, and Housebook never calls an AI
+service itself. Instead, an AI coding agent is the operator:
+
+1. **You hand the agent files.** For example: "import the statements in
+   my Downloads folder".
+2. **The agent files them.** It reads each document and works out what
+   it is. It files the document in your workspace with a small
+   structured summary beside it.
+3. **Housebook imports them.** Plain, deterministic code reads the
+   summaries into a local SQLite database. Every new row starts out
+   *unverified*.
+4. **The agent reviews them.** It follows the written procedures in
+   `prompts/` to fix categories, spot trips and pair refunds with their
+   purchases.
+5. **You check the result in the dashboard.** You correct anything
+   that's wrong, and your correction wins over any later guess.
+
+So you need an AI coding agent you're comfortable using. Housebook
+itself is the database, the import code, the procedures the agent
+follows, and the dashboard.
+
+## Try the demo
+
+The demo is five years of an invented family's finances, so you can
+look around without any data of your own:
+
 ```bash
-# Generate 'The Ledger Family' demo workspace
-housebook-demo-seed
-
-# Launch the app using the demo data
-HOUSEBOOK_WORKSPACE_DIR=demo-workspace housebook-app
+git clone https://github.com/adereis/housebook.git
+cd housebook
+./bootstrap.sh                   # creates .venv and installs Housebook
+.venv/bin/housebook-demo-seed    # writes demo-workspace/
+HOUSEBOOK_WORKSPACE_DIR=demo-workspace .venv/bin/housebook-app
 ```
-The seeder is idempotent and skips generation when the demo database
-already exists.
-See `demo-workspace/README.md` for the full "Ledger Family" story.
 
-## 📂 Project Structure
-- `src/housebook/`:
-    - `core/`: Shared database, reconciliation, spending, and matching logic.
-    - `cc/`, `amazon/`, `tax/`, `hsa/`: Isolated source modules and CLIs.
-    - `config/`: System settings and internal logic.
-    - `templates/`: Dynamic Jinja2 templates for the dashboard.
-- `config/`: Example templates (`.example.json`) for rules and user profile. Active config lives in the external workspace.
-- `tests/`: Comprehensive unit test suite.
-- `pyproject.toml`: Modern Python project configuration and dependencies.
+Then open <http://127.0.0.1:8000>. Try the Italy trip on the Spending
+page, and click an expense in the HSA Shoebox to open its receipts. The
+**Help** button in the header explains each page.
+`demo-workspace/README.md` tells the family's story.
 
-All raw financial data (PDFs, CSVs) and active configuration live outside the repo in `$HOUSEBOOK_WORKSPACE_DIR`. See `AGENTS.md` for the Stateless Repo Architecture details.
+## Your data and privacy
+
+- **The ledger stays on your computer.** It lives in a workspace folder
+  that you choose, outside this repository. Housebook's code makes no
+  AI calls. Its dashboard loads nothing from the internet, so it also
+  works offline.
+- **The agent is the exception.** To import and review your documents,
+  the AI agent has to read them. Their contents therefore reach
+  whichever AI provider runs that agent.
+- **Sync is optional.** It backs the workspace up to a storage remote
+  you configure, via rclone, and talks to nothing else.
+
+## Set up with your own data
+
+1. **Install the system tools:** `poppler-utils` (for `pdftotext`),
+   `sqlite3`, and `direnv` (recommended).
+2. **Choose a workspace:** create a folder **outside this repository**
+   for your financial data. Copy `.env.example` to `.env` and set
+   `HOUSEBOOK_WORKSPACE_DIR` to that folder. There is no default, so
+   every command refuses to run until the workspace exists.
+3. **Bootstrap:** run `./bootstrap.sh`. It creates the virtual
+   environment and the database.
+4. **Allow direnv, once:** run `direnv allow`. This puts the
+   `housebook-*` commands on your PATH inside the repository.
+
+## Day-to-day use
+
+Most of the time you talk to the agent, and it runs the commands. These
+are the ones you'll see:
+
+```bash
+housebook-ingest list --latest   # which statements are in, and any gaps
+housebook-amazon import ~/Downloads/Amazon-Data-Export.zip --profile <name>
+housebook-cc ingest              # after the agent has filed new card statements
+housebook-audit pending          # what still needs review
+housebook-app                    # the dashboard, at http://127.0.0.1:8000
+```
+
+The review step after every import is required, not optional. It is how
+guessed categories become checked ones; see `prompts/monthly_audit.md`.
+
+The dashboard only answers the computer it runs on. Reaching it from
+other devices at home requires an authenticating proxy. That setup is
+described in [`deploy/lan/README.md`](deploy/lan/README.md) and is not
+yet a supported configuration.
+
+## Contributing
+
+`AGENTS.md` describes the architecture, the rules the code keeps, and
+how each data source is handled. Run `./test.sh` before every commit.
 
 ## License
-MIT. See [`LICENSE`](LICENSE). To report a vulnerability, see [`SECURITY.md`](SECURITY.md).
+
+MIT. See [`LICENSE`](LICENSE). To report a vulnerability, see
+[`SECURITY.md`](SECURITY.md).
