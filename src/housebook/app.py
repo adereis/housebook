@@ -184,6 +184,22 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 # Setup templates directory
 PACKAGE_DIR = os.path.dirname(__file__)
 templates = Jinja2Templates(directory=os.path.join(PACKAGE_DIR, "templates"))
+
+# Help drawer topics, in order: (anchor, label). base.html includes the
+# drawer on every page and opens it at `help_topic`, which defaults to
+# the page's `active_module`, so a module's anchor must equal its name.
+HELP_SECTIONS = [
+    ("overview", "Getting started"),
+    ("spending", "Spending"),
+    ("trips", "Trips"),
+    ("manual", "Manual expenses"),
+    ("projects", "Projects"),
+    ("tax", "Income & Tax"),
+    ("hsa", "HSA Shoebox"),
+    ("review", "Review status"),
+    ("privacy", "Your data"),
+]
+templates.env.globals["HELP_SECTIONS"] = HELP_SECTIONS
 app.mount(
     "/static",
     StaticFiles(directory=os.path.join(PACKAGE_DIR, "static")),
@@ -442,30 +458,6 @@ async def spending_page(request: Request):
     )
 
 
-# Help topics, in page order: (anchor, label). The header's Help link
-# deep-links to the anchor named after the current module.
-HELP_SECTIONS = [
-    ("overview", "Getting started"),
-    ("spending", "Spending"),
-    ("trips", "Trips"),
-    ("manual", "Manual expenses"),
-    ("projects", "Projects"),
-    ("tax", "Income & Tax"),
-    ("hsa", "HSA Shoebox"),
-    ("review", "Review status"),
-    ("privacy", "Your data"),
-]
-
-
-@app.get("/help", response_class=HTMLResponse)
-async def help_page(request: Request):
-    return templates.TemplateResponse(
-        request,
-        "help.html",
-        {"sections": HELP_SECTIONS, "active_module": "help"},
-    )
-
-
 @app.get("/spending/trip/{trip_id}", response_class=HTMLResponse)
 async def trip_page(request: Request, trip_id: int):
     return templates.TemplateResponse(
@@ -474,6 +466,7 @@ async def trip_page(request: Request, trip_id: int):
         {
             "trip_id": trip_id,
             "active_module": "spending",
+            "help_topic": "trips",
         },
     )
 
