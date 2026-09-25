@@ -375,6 +375,17 @@ real-estate taxes). The scope question is settled: the engine will be
 multi-year and reconciled against filed evidence, one explicit
 year/status/jurisdiction parameter set at a time.
 
+### In-app help
+
+`/help` (`templates/help.html`) is the user-facing guide: one section
+per feature, in plain language, with no CLI detail beyond what a user
+would ask the agent for. `app.py::HELP_SECTIONS` lists the anchors in
+page order and feeds the topic bar. The header's Help link opens the
+anchor named after the current `active_module`, so a module page's
+anchor must equal its module name (`spending`, `tax`, `hsa`). When a
+change alters what a user sees or what a total includes, update the
+matching help section in the same commit.
+
 ### Dashboard asset build
 
 Dashboard runtime assets are local and committed under

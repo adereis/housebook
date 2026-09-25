@@ -36,6 +36,8 @@ Housebook is a proactive, local-first financial assistant. It evolves the tradit
    ```bash
    housebook-app          # http://127.0.0.1:8000
    ```
+   The **Help** link in the dashboard header explains what each page
+   is for, opening at the topic for the page you are on.
    A normal local launch has authentication disabled and is deliberately
    limited to loopback. The launcher rejects non-loopback binds. The app
    also has a fail-closed authenticated-proxy mode for the planned LAN
