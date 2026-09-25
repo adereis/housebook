@@ -46,7 +46,7 @@ statement proves payment.
 
 ## Document Sidecar Convention
 
-Documents are pre-processed by an AI agent (Gemini/Claude) into a
+Documents are pre-processed by an AI agent (Claude/Codex/Gemini) into a
 standardized format before ingestion. This eliminates OCR/heuristic
 parsing in the ingestor.
 

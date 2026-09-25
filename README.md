@@ -5,7 +5,8 @@ your own computer.** You hand it card statements, Amazon order exports,
 tax forms and medical receipts. It gives you a dashboard of where the
 money went, what each trip cost, and which medical bills you can still
 reimburse from your HSA. The paperwork itself is done by an AI coding
-agent, such as Claude Code or Gemini CLI, working in this repository.
+agent, such as Claude Code, Codex or Gemini CLI, working in this
+repository.
 
 ![The Spending dashboard: trip cards, totals and charts for the demo family](docs/screenshots/spending.webp)
 
