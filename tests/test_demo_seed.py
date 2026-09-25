@@ -7,7 +7,11 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
+from housebook.core.trip_detector import extract_location_hints
 from housebook.demo_seed import (
+    ITALY_TRIP,
+    MERCHANTS,
+    TRIPS,
     seed_db,
     setup_workspace,
 )
@@ -168,6 +172,112 @@ class TestDemoSeed(unittest.TestCase):
         # 2025 should be significantly higher than 2021 (approx 23% based on our scales)
         self.assertGreater(avg_2025, avg_2021 * 1.15)
         self.assertLess(avg_2025, avg_2021 * 1.35)
+
+
+class TestDemoTrips(unittest.TestCase):
+    """The demo trips must follow the project's own assignment rules."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.test_root = tempfile.mkdtemp()
+        cls.old_cwd = os.getcwd()
+        os.chdir(cls.test_root)
+        setup_workspace()
+        seed_db()
+        cls.conn = sqlite3.connect(os.path.join(
+            "demo-workspace", "data", "finance.db"))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+        os.chdir(cls.old_cwd)
+        shutil.rmtree(cls.test_root)
+
+    def _trip(self, name):
+        return self.conn.execute(
+            "SELECT id, start_date, end_date FROM trips WHERE name = ?",
+            (name,),
+        ).fetchone()
+
+    def test_home_merchants_are_never_linked_to_a_trip(self):
+        """A trip is linked by location, not date overlap alone."""
+        home = [m for merchants in MERCHANTS.values() for m, _, _ in merchants]
+        linked = self.conn.execute(
+            "SELECT description FROM transactions WHERE trip_id IS NOT NULL"
+            f" AND description IN ({','.join('?' * len(home))})",
+            home,
+        ).fetchall()
+        self.assertEqual(linked, [])
+
+    def test_no_home_discretionary_spend_while_family_is_away(self):
+        _, start, end = self._trip(ITALY_TRIP)
+        rows = self.conn.execute(
+            "SELECT description FROM transactions"
+            " WHERE date BETWEEN ? AND ? AND trip_id IS NULL"
+            " AND category IN ('Groceries', 'Dining & Takeout')"
+            " AND source != 'Amazon CSV'",
+            (start, end),
+        ).fetchall()
+        self.assertEqual(rows, [])
+
+    def test_vacation_includes_advance_bookings(self):
+        trip_id, start, _ = self._trip(ITALY_TRIP)
+        early = self.conn.execute(
+            "SELECT category FROM transactions"
+            " WHERE trip_id = ? AND date < ?",
+            (trip_id, start),
+        ).fetchall()
+        self.assertIn(("Flights",), early)
+        self.assertIn(("Lodging",), early)
+
+    def test_foreign_charges_record_original_currency(self):
+        trip_id, _, _ = self._trip(ITALY_TRIP)
+        rows = self.conn.execute(
+            "SELECT amount, metadata FROM transactions"
+            " WHERE trip_id = ? AND description LIKE '% IT'",
+            (trip_id,),
+        ).fetchall()
+        self.assertTrue(rows)
+        for amount, metadata in rows:
+            meta = json.loads(metadata)
+            self.assertEqual(meta["foreign_currency"], "EUR")
+            self.assertAlmostEqual(
+                amount, meta["foreign_amount"] * meta["exchange_rate"],
+                places=2)
+
+    def test_trip_descriptions_carry_a_location_hint(self):
+        """Charges made abroad end in the country, as detect-trips reads."""
+        trip_id, start, end = self._trip(ITALY_TRIP)
+        rows = self.conn.execute(
+            "SELECT description FROM transactions WHERE trip_id = ?"
+            " AND date BETWEEN ? AND ? AND metadata IS NOT NULL",
+            (trip_id, start, end),
+        ).fetchall()
+        self.assertGreater(len(rows), 20)
+        hint = extract_location_hints([{"description": d} for d, in rows])
+        self.assertEqual(hint, "IT")
+
+    def test_work_trip_charges_are_reimbursable(self):
+        for trip in TRIPS:
+            if trip["type"] != "Work":
+                continue
+            cats = self.conn.execute(
+                "SELECT DISTINCT category FROM transactions"
+                " WHERE trip_id = (SELECT id FROM trips WHERE name = ?)",
+                (trip["name"],),
+            ).fetchall()
+            self.assertEqual(cats, [("Work (Reimbursable)",)], trip["name"])
+
+    def test_visits_to_family_have_no_hotel(self):
+        for trip in TRIPS:
+            if trip.get("lodging") is not False:
+                continue
+            n = self.conn.execute(
+                "SELECT COUNT(*) FROM transactions WHERE category = 'Lodging'"
+                " AND trip_id = (SELECT id FROM trips WHERE name = ?)",
+                (trip["name"],),
+            ).fetchone()[0]
+            self.assertEqual(n, 0, trip["name"])
 
 
 if __name__ == "__main__":
