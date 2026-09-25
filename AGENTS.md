@@ -377,14 +377,27 @@ year/status/jurisdiction parameter set at a time.
 
 ### In-app help
 
-`/help` (`templates/help.html`) is the user-facing guide: one section
-per feature, in plain language, with no CLI detail beyond what a user
-would ask the agent for. `app.py::HELP_SECTIONS` lists the anchors in
-page order and feeds the topic bar. The header's Help link opens the
-anchor named after the current `active_module`, so a module page's
-anchor must equal its module name (`spending`, `tax`, `hsa`). When a
-change alters what a user sees or what a total includes, update the
-matching help section in the same commit.
+The user-facing guide is a drawer, not a page: `templates/_help_drawer.html`,
+included by `base.html` on every page and slid in from the right by the
+header's Help button. It has one section per feature, in plain language, with
+no CLI detail beyond what a user would ask the agent for. When a change
+alters what a user sees or what a total includes, update the matching
+section in the same commit.
+
+- **Topics:** `app.py::HELP_SECTIONS` lists them in order. It is a Jinja
+  global, so every template can render the topic bar. Section ids are
+  `help-<anchor>` so they cannot collide with ids on the page.
+- **Opening topic:** the drawer opens at `help_topic`, which defaults to
+  the page's `active_module`. A module's anchor must therefore equal its
+  name (`spending`, `tax`, `hsa`). A route can pass `help_topic` to
+  override it; the trip page opens at `trips`.
+- **Outside Vue, native `<dialog>`:** the drawer is static markup placed
+  outside `#app`, driven by a few lines of plain JS in `base.html`,
+  because each page mounts its own Vue app. `showModal()` supplies focus
+  trapping, Escape, and focus return to the button. Closing adds a
+  `closing` class and calls `close()` on `animationend`, so the drawer
+  slides out as well as in. Reduced-motion users get no animation, and
+  the drawer closes immediately.
 
 ### Dashboard asset build
 

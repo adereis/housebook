@@ -18,6 +18,33 @@
         thead th { position: sticky; top: 0; z-index: 2; }
         .no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
         .no-scrollbar::-webkit-scrollbar { display: none; }
+        /* Help drawer: a native <dialog> pinned to the right edge that
+           slides in on open and back out before it closes. */
+        #help-drawer { margin: 0 0 0 auto; padding: 0; border: 0; height: 100dvh; max-height: none;
+                       width: min(30rem, 100vw); max-width: none; box-shadow: -8px 0 24px rgb(15 23 42 / 0.12); }
+        #help-drawer::backdrop { background: rgb(15 23 42 / 0.25); }
+        #help-drawer[open] { animation: help-slide-in 0.25s ease-out; }
+        #help-drawer[open]::backdrop { animation: help-fade-in 0.25s ease-out; }
+        #help-drawer.closing { animation: help-slide-out 0.2s ease-in forwards; }
+        #help-drawer.closing::backdrop { animation: help-fade-out 0.2s ease-in forwards; }
+        @keyframes help-slide-in { from { transform: translateX(100%); } }
+        @keyframes help-slide-out { to { transform: translateX(100%); } }
+        @keyframes help-fade-in { from { opacity: 0; } }
+        @keyframes help-fade-out { to { opacity: 0; } }
+        @media (prefers-reduced-motion: reduce) {
+            #help-drawer[open], #help-drawer.closing,
+            #help-drawer[open]::backdrop, #help-drawer.closing::backdrop { animation: none; }
+        }
+        .help-section { padding-top: 1.25rem; }
+        .help-section + .help-section { margin-top: 1.25rem; border-top: 1px solid #f3f4f6; }
+        .help-section h2 { font-size: 1.05rem; font-weight: 800; color: #111827; }
+        .help-section h3 { font-size: 0.875rem; font-weight: 700; color: #1f2937; margin-top: 1rem; }
+        .help-section p, .help-section li { font-size: 0.875rem; line-height: 1.6; color: #4b5563; }
+        .help-section p + p, .help-section p + ul, .help-section ul + p { margin-top: 0.75rem; }
+        .help-section ul { list-style: disc; padding-left: 1.25rem; margin-top: 0.5rem; }
+        .help-section li + li { margin-top: 0.25rem; }
+        .help-section strong { color: #1f2937; }
+        .help-section code { font-size: 0.8rem; background: #f3f4f6; padding: 0.1rem 0.3rem; border-radius: 0.25rem; }
         {% block style_extra %}{% endblock %}
     </style>
 </head>
@@ -55,13 +82,14 @@
                             HSA Shoebox
                         </a>
                     </nav>
-                    <a href="/help{% if active_module in ('spending', 'tax', 'hsa') %}#{{ active_module }}{% endif %}"
-                       {% if active_module == 'help' %}aria-current="page"{% endif %}
-                       title="What each page is for" aria-label="Help"
-                       class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-sm font-bold whitespace-nowrap transition-all shrink-0 {% if active_module == 'help' %}text-blue-600{% else %}text-gray-500 hover:text-gray-700{% endif %}">
+                    <button type="button" id="help-open"
+                            data-help-topic="{{ help_topic | default(active_module) }}"
+                            aria-haspopup="dialog" aria-controls="help-drawer"
+                            title="What each page is for" aria-label="Help"
+                            class="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-sm font-bold whitespace-nowrap transition-all shrink-0 text-gray-500 hover:text-gray-700">
                         <svg aria-hidden="true" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
                         <span aria-hidden="true" class="hidden sm:inline">Help</span>
-                    </a>
+                    </button>
                 </div>
             </div>
         </div>
@@ -102,6 +130,8 @@
     </div>
 {% endraw %}
 
+    {% include "_help_drawer.html" %}
+
     <script>
         const CHART_COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#f97316', '#84cc16', '#6366f1', '#14b8a6', '#e11d48', '#a855f7', '#0ea5e9', '#d97706', '#64748b'];
         const { createApp, ref, computed, watch, onMounted, nextTick } = Vue;
@@ -139,6 +169,45 @@
                 throw error;
             }
         };
+        // Help drawer. Plain JS rather than Vue: every page shares it,
+        // while each page mounts its own Vue app.
+        (() => {
+            const drawer = document.getElementById('help-drawer');
+            const opener = document.getElementById('help-open');
+            const scroller = document.getElementById('help-drawer-scroll');
+
+            const goTo = (topic, behavior) => {
+                const section = document.getElementById('help-' + topic);
+                if (section) scroller.scrollTo({ top: section.offsetTop, behavior });
+            };
+            const close = () => {
+                if (!drawer.open || drawer.classList.contains('closing')) return;
+                drawer.classList.add('closing');
+                const done = () => {
+                    drawer.classList.remove('closing');
+                    drawer.close();
+                };
+                // Reduced motion disables the animation, so no animationend.
+                if (getComputedStyle(drawer).animationName === 'none') done();
+                else drawer.addEventListener('animationend', done, { once: true });
+            };
+
+            opener.addEventListener('click', () => {
+                drawer.showModal();
+                goTo(opener.dataset.helpTopic, 'instant');
+            });
+            drawer.addEventListener('cancel', (event) => {
+                event.preventDefault();  // Escape: animate out instead
+                close();
+            });
+            drawer.addEventListener('click', (event) => {
+                if (event.target === drawer) close();  // the backdrop
+                if (event.target.closest('[data-help-close]')) close();
+                const topic = event.target.closest('[data-help-goto]');
+                if (topic) goTo(topic.dataset.helpGoto, 'smooth');
+            });
+        })();
+
         {% block vue_app %}{% endblock %}
     </script>
 </body>

@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -6,9 +7,16 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+PAGES = {
+    "/spending": "spending",
+    "/tax": "tax",
+    "/hsa": "hsa",
+    "/spending/trip/1": "trips",
+}
 
-class TestHelpPage(unittest.TestCase):
-    """GET /help documents every feature, and each page links to it."""
+
+class TestHelpDrawer(unittest.TestCase):
+    """Every page carries the help drawer, opening at its own topic."""
 
     def setUp(self):
         fd, self.db_path = tempfile.mkstemp(suffix=".db")
@@ -26,27 +34,44 @@ class TestHelpPage(unittest.TestCase):
         self.patcher.stop()
         os.unlink(self.db_path)
 
-    def test_help_has_a_section_for_every_topic(self):
+    def test_every_page_has_every_topic(self):
         from housebook.app import HELP_SECTIONS
 
-        response = self.client.get("/help")
-        self.assertEqual(response.status_code, 200)
-        for anchor, label in HELP_SECTIONS:
-            with self.subTest(anchor=anchor):
-                self.assertIn(f'id="{anchor}"', response.text)
-                self.assertIn(f'href="#{anchor}"', response.text)
+        for page in PAGES:
+            html = self.client.get(page).text
+            for anchor, _ in HELP_SECTIONS:
+                with self.subTest(page=page, anchor=anchor):
+                    self.assertIn(f'id="help-{anchor}"', html)
+                    self.assertIn(f'data-help-goto="{anchor}"', html)
 
-    def test_help_link_opens_the_current_pages_topic(self):
-        for page in ("spending", "tax", "hsa"):
+    def test_help_opens_at_the_current_pages_topic(self):
+        for page, topic in PAGES.items():
             with self.subTest(page=page):
-                response = self.client.get(f"/{page}")
-                self.assertEqual(response.status_code, 200)
-                self.assertIn(f'href="/help#{page}"', response.text)
+                html = self.client.get(page).text
+                self.assertRegex(
+                    html, rf'id="help-open"\s+data-help-topic="{topic}"')
 
-    def test_help_page_marks_itself_current(self):
-        response = self.client.get("/help")
-        self.assertRegex(
-            response.text, r'href="/help"\s+aria-current="page"')
+    def test_default_topics_exist(self):
+        """A page's topic must name a section, or the drawer opens nowhere."""
+        from housebook.app import HELP_SECTIONS
+
+        anchors = {anchor for anchor, _ in HELP_SECTIONS}
+        self.assertLessEqual(set(PAGES.values()), anchors)
+
+    def test_drawer_is_a_dialog_outside_the_vue_app(self):
+        """Static help markup must not be compiled by a page's Vue app."""
+        html = self.client.get("/spending").text
+        app_start = html.index('<div id="app"')
+        drawer = html.index('<dialog id="help-drawer"')
+        script = html.index("<script>", app_start)
+        self.assertLess(app_start, drawer)
+        self.assertLess(drawer, script)
+        self.assertEqual(
+            len(re.findall(r'<div id="app"', html)), 1)
+        self.assertNotIn("{{", html[drawer:script])
+
+    def test_standalone_help_page_is_gone(self):
+        self.assertEqual(self.client.get("/help").status_code, 404)
 
 
 if __name__ == "__main__":
