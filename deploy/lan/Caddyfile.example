@@ -1,0 +1,44 @@
+{$HOUSEBOOK_DOMAIN:housebook.example.test} {
+	# The live hostname resolves only on the private network. Caddy's local
+	# CA must be trusted explicitly on every authorized client.
+	tls internal
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+
+	# OAuth2 Proxy owns its callback, sign-in, and sign-out endpoints.
+	# These paths are not anonymous: OAuth2 Proxy applies its own protocol
+	# and session checks to them.
+	handle /oauth2/* {
+		reverse_proxy 127.0.0.1:4180 {
+			header_up X-Real-IP {remote_host}
+			header_up X-Forwarded-Uri {uri}
+		}
+	}
+
+	# Every application request is authorized before it can reach Uvicorn.
+	handle {
+		forward_auth 127.0.0.1:4180 {
+			uri /oauth2/auth
+			header_up X-Real-IP {remote_host}
+			copy_headers X-Auth-Request-Email
+
+			@unauthenticated status 401
+			handle_response @unauthenticated {
+				redir * /oauth2/sign_in?rd={scheme}://{host}{uri}
+			}
+		}
+
+		reverse_proxy 127.0.0.1:8000 {
+			# Set, rather than append, the private credential so a client
+			# cannot supply its own value. The app compares it in constant
+			# time before trusting X-Auth-Request-Email.
+			header_up X-Housebook-Proxy-Secret "{$HOUSEBOOK_PROXY_SECRET}"
+		}
+	}
+}

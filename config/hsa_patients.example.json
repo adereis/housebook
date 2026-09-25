@@ -1,0 +1,12 @@
+{
+    "patients": [
+        {
+            "id": "self",
+            "name": "Your Name",
+            "relationship": "self",
+            "dob": "1985-01-15",
+            "hsa_eligible_since": "2020-01-01",
+            "notes": "Primary account holder"
+        }
+    ]
+}

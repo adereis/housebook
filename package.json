@@ -1,0 +1,13 @@
+{
+  "name": "housebook-ui-assets",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Pinned build inputs for the local dashboard assets",
+  "devDependencies": {
+    "caniuse-lite": "1.0.30001810",
+    "chart.js": "4.5.1",
+    "chartjs-chart-sankey": "0.14.0",
+    "tailwindcss": "3.4.17",
+    "vue": "3.5.33"
+  }
+}

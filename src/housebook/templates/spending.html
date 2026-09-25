@@ -1,0 +1,1355 @@
+{% extends "base.html" %}
+
+{% block title %}Spending — Housebook{% endblock %}
+
+{% block head_extra %}
+    <script src="/static/vendor/chart.umd.min.js"></script>
+    <script src="/static/vendor/chartjs-chart-sankey.min.js"></script>
+{% endblock %}
+
+{% block header_rows %}
+{% raw %}
+                <!-- Date presets + date inputs -->
+                <div class="py-2 flex items-center gap-2 min-w-0 overflow-x-auto no-scrollbar">
+                    <div class="flex items-center gap-1 shrink-0">
+                        <button v-for="preset in datePresets" :key="preset.label"
+                                @click="applyPreset(preset)"
+                                :class="activePreset === preset.label ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400 hover:text-blue-600'"
+                                class="px-2.5 py-1 rounded-lg text-xs font-bold border transition-all">
+                            {{ preset.label }}
+                        </button>
+                    </div>
+                    <div class="flex items-center bg-gray-50 rounded-lg px-2 py-1 text-xs border border-gray-200 shrink-0">
+                        <span class="text-gray-400 mr-1.5">From</span>
+                        <input aria-label="Start date" type="text" v-model="filters.startDate" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="bg-transparent focus:outline-none font-semibold text-gray-700 w-[88px] tabular-nums">
+                        <span class="text-gray-400 mx-1.5">To</span>
+                        <input aria-label="End date" type="text" v-model="filters.endDate" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="bg-transparent focus:outline-none font-semibold text-gray-700 w-[88px] tabular-nums">
+                    </div>
+                    <!-- Sub-view toggle + Quick Add -->
+                    <div class="ml-auto flex items-center gap-2 shrink-0">
+                        <div class="flex bg-gray-100 p-0.5 rounded-lg border border-gray-200">
+                            <button @click="view = 'spending'"
+                                    :class="view === 'spending' ? 'bg-white text-gray-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'"
+                                    class="px-3 py-1 rounded-md text-xs font-bold transition-all">
+                                Transactions
+                            </button>
+                            <button @click="view = 'manual'"
+                                    :class="view === 'manual' ? 'bg-white text-gray-700 shadow-sm' : 'text-gray-400 hover:text-gray-600'"
+                                    class="px-3 py-1 rounded-md text-xs font-bold transition-all">
+                                Manual
+                            </button>
+                        </div>
+                        <button v-show="view === 'spending'" @click="showManualPanel = true"
+                                class="flex items-center gap-1.5 px-3 py-1 bg-gray-100 hover:bg-gray-200 text-gray-600 border border-gray-200 rounded-lg text-xs font-semibold transition-colors">
+                            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                            Quick Add
+                        </button>
+                    </div>
+                </div>
+                <!-- Search + filters (spending sub-view only) -->
+                <div v-show="view === 'spending'" class="pb-3 flex items-center gap-2 min-w-0 overflow-x-auto no-scrollbar">
+                    <input aria-label="Search transactions" type="text" v-model="filters.search" placeholder="Search..."
+                           class="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-[160px] focus:border-blue-400 focus:outline-none">
+                    <select aria-label="Filter by category" v-model="filters.category" class="bg-white border border-gray-300 rounded-lg px-2 py-1.5 text-xs">
+                        <option value="">All Categories</option>
+                        <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                    </select>
+                    <select aria-label="Filter by source" v-model="filters.source" class="bg-white border border-gray-300 rounded-lg px-2 py-1.5 text-xs">
+                        <option value="">All Sources</option>
+                        <option v-for="src in sources" :key="src" :value="src">{{ src }}</option>
+                    </select>
+                    <button @click="filters.onlyReview = !filters.onlyReview"
+                            :class="filters.onlyReview ? 'bg-orange-100 text-orange-700 border-orange-300' : 'bg-white text-gray-500 border-gray-300 hover:border-orange-300'"
+                            class="px-2.5 py-1.5 rounded-lg text-xs font-bold border transition-all flex items-center gap-1">
+                        &#9888; Review
+                    </button>
+                </div>
+{% endraw %}
+{% endblock %}
+
+{% block content %}
+{% raw %}
+                <!-- ==================== SPENDING VIEW ==================== -->
+                <div v-if="view === 'spending'">
+                    <!-- Trip Sections -->
+                    <div class="mb-10">
+                        <div v-if="filteredPersonalTrips.length">
+                            <h2 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Vacations & Trips</h2>
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-6">
+                                <a v-for="trip in filteredPersonalTrips" :key="trip.id"
+                                     :href="'/spending/trip/' + trip.id"
+                                     class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 cursor-pointer hover:shadow-md transition-all relative overflow-hidden group block">
+                                    <div class="absolute top-0 left-0 w-1 h-full bg-indigo-500"></div>
+                                    <p class="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{{ trip.start_date }} — {{ trip.end_date }}</p>
+                                    <h3 class="text-base font-bold text-gray-800 mt-0.5">{{ trip.name }}</h3>
+                                    <p class="text-xl font-black text-indigo-600 mt-2">${{ formatAmount(trip.total || 0) }}</p>
+                                </a>
+                            </div>
+                        </div>
+                        <div v-if="filteredWorkTrips.length">
+                            <h2 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Work Events (Reimbursable)</h2>
+                            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mb-6">
+                                <div v-for="trip in filteredWorkTrips" :key="trip.id"
+                                     @click="filterByTrip(trip)"
+                                     :class="filters.tripId === trip.id ? 'ring-2 ring-purple-300 border-purple-200' : 'border-gray-100'"
+                                     class="bg-white p-2.5 rounded-lg shadow-sm border cursor-pointer hover:shadow-md transition-all relative overflow-hidden">
+                                    <div class="absolute top-0 left-0 w-1 h-full bg-purple-400"></div>
+                                    <div class="flex justify-between items-center">
+                                        <h3 class="text-xs font-bold text-gray-700 truncate mr-2">{{ trip.name }}</h3>
+                                        <span class="text-xs font-black text-purple-600">${{ formatAmount(trip.total || 0) }}</span>
+                                    </div>
+                                    <p class="text-[9px] text-gray-400 mt-0.5">{{ trip.start_date }}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- KPI Stats -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Personal Total</p>
+                            <p class="text-2xl font-black text-gray-900 mt-1">${{ formatAmount(stats.total) }}</p>
+                            <p class="text-[10px] text-gray-400 mt-0.5 italic">Excludes Reimbursable Work expenses</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Top Category</p>
+                            <p class="text-2xl font-black text-blue-600 mt-1 truncate">{{ stats.topCategory || 'N/A' }}</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 cursor-pointer" @click="filters.onlyReview = !filters.onlyReview">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Needs Review</p>
+                            <p class="text-2xl font-black mt-1" :class="reviewCount > 0 ? 'text-orange-500' : 'text-gray-300'">{{ reviewCount }}</p>
+                        </div>
+                    </div>
+
+                    <!-- Charts -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 min-w-0">
+                            <h3 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Spend Distribution: Total to Category <span class="text-gray-300 normal-case font-normal">(click to filter)</span></h3>
+                            <div v-if="filteredTransactions.length === 0" class="chart-container !h-[320px] flex items-center justify-center">
+                                <p class="text-gray-300 text-sm font-semibold">No spending data for this period</p>
+                            </div>
+                            <div v-else class="chart-container !h-[320px]"><canvas id="categoryChart"></canvas></div>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 min-w-0">
+                            <h3 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Monthly Trend</h3>
+                            <div v-if="filteredTransactions.length === 0" class="chart-container flex items-center justify-center">
+                                <p class="text-gray-300 text-sm font-semibold">No spending data for this period</p>
+                            </div>
+                            <div v-else class="chart-container"><canvas id="trendChart"></canvas></div>
+                        </div>
+                    </div>
+
+                    <!-- Active Filter Banner -->
+                    <div v-if="hasActiveFilters" class="mb-3 flex flex-wrap items-center gap-2 text-xs">
+                        <span class="text-gray-400 font-semibold">Filtered by:</span>
+                        <span v-if="filters.category" class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                            {{ filters.category }}
+                            <button @click="filters.category = ''" class="hover:text-blue-900 text-[10px]">&#10005;</button>
+                        </span>
+                        <span v-if="filters.source" class="bg-gray-200 text-gray-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                            {{ filters.source }}
+                            <button @click="filters.source = ''" class="hover:text-gray-900 text-[10px]">&#10005;</button>
+                        </span>
+                        <span v-if="filters.tripId" class="bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                            {{ tripsList.find(t => t.id == filters.tripId)?.name || 'Trip' }}
+                            <button @click="filters.tripId = null" class="hover:text-indigo-900 text-[10px]">&#10005;</button>
+                        </span>
+                        <span v-if="filters.search" class="bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                            "{{ filters.search }}"
+                            <button @click="filters.search = ''" class="hover:text-amber-900 text-[10px]">&#10005;</button>
+                        </span>
+                        <span v-if="filters.onlyReview" class="bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                            Needs Review
+                            <button @click="filters.onlyReview = false" class="hover:text-orange-900 text-[10px]">&#10005;</button>
+                        </span>
+                        <button @click="clearNonDateFilters" class="text-red-500 font-bold ml-1 hover:text-red-700">Clear All</button>
+                    </div>
+
+                    <!-- Transaction Table -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                            <h3 class="font-bold text-gray-700 text-sm">Transactions</h3>
+                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{{ filteredTransactions.length }} matches</span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-gray-50 text-gray-400 text-[10px] uppercase tracking-widest font-bold border-b border-gray-100">
+                                        <th class="px-2 py-3 w-px text-center">REV</th>
+                                        <th @click="sortBy('date')" class="px-4 py-3 w-32 cursor-pointer hover:text-gray-600 select-none">
+                                            Date <span v-if="sortKey === 'date'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('category')" class="px-4 py-3 w-40 cursor-pointer hover:text-gray-600 select-none">
+                                            Category <span v-if="sortKey === 'category'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('description')" class="px-4 py-3 cursor-pointer hover:text-gray-600 select-none">
+                                            Description <span v-if="sortKey === 'description'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('source')" class="px-4 py-3 w-24 cursor-pointer hover:text-gray-600 select-none">
+                                            Source <span v-if="sortKey === 'source'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('amount')" class="px-4 py-3 w-28 text-right cursor-pointer hover:text-gray-600 select-none">
+                                            Amount <span v-if="sortKey === 'amount'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('trip_name')" class="px-4 py-3 w-32 cursor-pointer hover:text-gray-600 select-none">
+                                            Trip <span v-if="sortKey === 'trip_name'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-50">
+                                    <tr v-for="tx in paginatedTransactions" :key="tx.id"
+                                        @click="openTxModal(tx)"
+                                        :class="tx.needs_review ? 'bg-orange-50/40' : 'hover:bg-gray-50/80'"
+                                        class="transition-colors cursor-pointer group">
+                                        <td class="px-2 py-3 text-center" @click.stop>
+                                            <button v-if="!isManualTx(tx)"
+                                                    @click="toggleReview(tx)"
+                                                    :aria-label="tx.needs_review ? 'Mark transaction reviewed' : 'Flag transaction for review'"
+                                                    :class="tx.needs_review ? 'text-orange-500' : 'text-gray-200 group-hover:text-gray-300'"
+                                                    class="text-base transition-colors" v-html="tx.needs_review ? '&#9888;' : '&#9651;'">
+                                            </button>
+                                            <span v-else class="text-gray-200">—</span>
+                                        </td>
+                                        <td class="px-4 py-3 text-sm text-gray-500 font-medium tabular-nums whitespace-nowrap">{{ tx.date }}</td>
+                                        <td class="px-4 py-3" @click.stop>
+                                            <select v-if="!isManualTx(tx)"
+                                                    :value="tx.category"
+                                                    :aria-label="'Category for ' + tx.description"
+                                                    @change="updateCategory(tx, $event)"
+                                                    :class="[tx.category === 'Work (Reimbursable)' ? 'bg-purple-50 text-purple-700' : !categories.includes(tx.category) ? 'bg-red-50 text-red-700' : 'bg-blue-50 text-blue-700']"
+                                                    class="text-[11px] border-none rounded-full px-2.5 py-0.5 font-bold cursor-pointer hover:opacity-80 focus:ring-2 focus:ring-blue-400 appearance-none">
+                                                <option v-if="!categories.includes(tx.category)" :value="tx.category">⚠ {{ tx.category }}</option>
+                                                <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                                            </select>
+                                            <span v-else class="bg-purple-50 text-purple-700 text-[11px] rounded-full px-2.5 py-0.5 font-bold">
+                                                {{ tx.category }}
+                                            </span>
+                                        </td>
+                                        <td class="px-4 py-3 text-sm text-gray-900 font-medium truncate max-w-md" :title="tx.description">
+                                            {{ tx.description }}
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <span :class="tx.source === 'MANUAL' ? 'text-purple-500 font-semibold' : 'text-gray-400 font-mono'" class="text-[11px]">
+                                                {{ tx.source }}
+                                            </span>
+                                        </td>
+                                        <td class="px-4 py-3 text-sm text-right font-bold text-gray-900 tabular-nums">
+                                            ${{ formatAmount(tx.amount) }}
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <span v-if="tx.trip_name" class="bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded text-[10px] font-bold truncate inline-block max-w-[110px]">
+                                                {{ tx.trip_name }}
+                                            </span>
+                                            <span v-else class="text-gray-200 text-xs">—</span>
+                                        </td>
+                                    </tr>
+                                    <tr v-if="paginatedTransactions.length === 0">
+                                        <td colspan="7" class="px-4 py-12 text-center text-gray-400">No transactions match your filters.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <!-- Pagination -->
+                        <div class="px-5 py-3 bg-gray-50 border-t border-gray-100 flex items-center justify-between">
+                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                                {{ Math.min((page - 1) * pageSize + 1, filteredTransactions.length) }}–{{ Math.min(page * pageSize, filteredTransactions.length) }}
+                                of {{ filteredTransactions.length }}
+                            </span>
+                            <div class="flex items-center gap-1">
+                                <button @click="page--" :disabled="page === 1"
+                                        class="px-2.5 py-1 bg-white border border-gray-300 rounded text-xs font-bold disabled:opacity-30 hover:bg-gray-50">Prev</button>
+                                <template v-for="p in visiblePages" :key="p">
+                                    <span v-if="p === '...'" class="px-1.5 text-gray-400 text-xs">...</span>
+                                    <button v-else @click="page = p"
+                                            :class="page === p ? 'bg-blue-600 text-white border-blue-600' : 'bg-white border-gray-300 hover:bg-gray-50'"
+                                            class="px-2.5 py-1 border rounded text-xs font-bold min-w-[30px]">{{ p }}</button>
+                                </template>
+                                <button @click="page++" :disabled="page >= totalPages"
+                                        class="px-2.5 py-1 bg-white border border-gray-300 rounded text-xs font-bold disabled:opacity-30 hover:bg-gray-50">Next</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ==================== MANUAL EXPENSES VIEW ==================== -->
+                <div v-if="view === 'manual'">
+                    <!-- Summary Cards -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Monthly Impact</p>
+                            <p class="text-2xl font-black text-blue-600 mt-1">${{ formatAmount(monthlyManualCost) }}</p>
+                            <p class="text-[10px] text-gray-400 mt-0.5 italic">${{ formatAmount(yearlyManualCost) }}/yr projected</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Active / Total</p>
+                            <p class="text-2xl font-black text-gray-900 mt-1">
+                                <span class="text-green-600">{{ activeManualCount }}</span>
+                                <span class="text-gray-300 font-normal mx-1">/</span>
+                                {{ manualExpenses.length }}
+                            </p>
+                            <p class="text-[10px] text-gray-400 mt-0.5 italic">{{ pastManualCount }} past</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Top Categories</p>
+                            <div class="flex flex-wrap gap-1.5 mt-2">
+                                <span v-for="tc in topManualCategories" :key="tc.name"
+                                      class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-[10px] font-bold">
+                                    {{ tc.name }} ${{ formatAmount(tc.monthly) }}/mo
+                                </span>
+                                <span v-if="topManualCategories.length === 0" class="text-gray-300 text-xs">—</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Filters -->
+                    <div class="mb-4 flex items-center gap-2">
+                        <select v-model="manualFilters.category" class="bg-white border border-gray-300 rounded-lg px-2 py-1.5 text-xs">
+                            <option value="">All Categories</option>
+                            <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                        </select>
+                        <select v-model="manualFilters.frequency" class="bg-white border border-gray-300 rounded-lg px-2 py-1.5 text-xs">
+                            <option value="">All Frequencies</option>
+                            <option value="monthly">Monthly</option>
+                            <option value="yearly">Yearly</option>
+                            <option value="one-time">One-time</option>
+                        </select>
+                        <select v-model="manualFilters.status" class="bg-white border border-gray-300 rounded-lg px-2 py-1.5 text-xs">
+                            <option value="">All</option>
+                            <option value="active">Active</option>
+                            <option value="past">Past</option>
+                        </select>
+                        <div class="flex-1"></div>
+                        <button @click="startAddManual"
+                                class="flex items-center gap-1.5 px-3 py-1.5 bg-blue-600 text-white rounded-lg text-xs font-bold hover:bg-blue-700 transition-colors">
+                            <span class="text-sm leading-none">+</span> Add Expense
+                        </button>
+                    </div>
+
+                    <!-- Manual Expenses Table -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                            <h3 class="font-bold text-gray-700 text-sm">Manual Expenses</h3>
+                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{{ filteredManual.length }} items</span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-gray-50 text-gray-400 text-[10px] uppercase tracking-widest font-bold border-b border-gray-100">
+                                        <th @click="manualSortBy('description')" class="px-4 py-3 cursor-pointer hover:text-gray-600 select-none">
+                                            Description <span v-if="manualSortKey === 'description'" v-html="manualSortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="manualSortBy('amount')" class="px-4 py-3 w-28 text-right cursor-pointer hover:text-gray-600 select-none">
+                                            Amount <span v-if="manualSortKey === 'amount'" v-html="manualSortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="manualSortBy('monthlyCost')" class="px-4 py-3 w-28 text-right cursor-pointer hover:text-gray-600 select-none">
+                                            Monthly <span v-if="manualSortKey === 'monthlyCost'" v-html="manualSortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="manualSortBy('category')" class="px-4 py-3 w-36 cursor-pointer hover:text-gray-600 select-none">
+                                            Category <span v-if="manualSortKey === 'category'" v-html="manualSortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="manualSortBy('frequency')" class="px-4 py-3 w-24 cursor-pointer hover:text-gray-600 select-none">
+                                            Freq <span v-if="manualSortKey === 'frequency'" v-html="manualSortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="manualSortBy('start_date')" class="px-4 py-3 w-32 cursor-pointer hover:text-gray-600 select-none">
+                                            Start <span v-if="manualSortKey === 'start_date'" v-html="manualSortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="manualSortBy('end_date')" class="px-4 py-3 w-32 cursor-pointer hover:text-gray-600 select-none">
+                                            End <span v-if="manualSortKey === 'end_date'" v-html="manualSortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="manualSortBy('status')" class="px-4 py-3 w-20 text-center cursor-pointer hover:text-gray-600 select-none">
+                                            Status <span v-if="manualSortKey === 'status'" v-html="manualSortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th class="px-4 py-3 w-24 text-center">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-50">
+                                    <!-- Add new row -->
+                                    <tr v-if="addingManualInline" class="bg-blue-50/30">
+                                        <td class="px-4 py-2">
+                                            <input v-model="newExpense.description" placeholder="Description" class="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:ring-2 focus:ring-blue-400 focus:border-blue-400">
+                                        </td>
+                                        <td class="px-4 py-2">
+                                            <input v-model.number="newExpense.amount" type="number" step="0.01" class="w-full border border-gray-300 rounded px-2 py-1 text-sm text-right focus:ring-2 focus:ring-blue-400">
+                                        </td>
+                                        <td class="px-4 py-2 text-right text-sm text-gray-400">—</td>
+                                        <td class="px-4 py-2">
+                                            <select v-model="newExpense.category" class="w-full border border-gray-300 rounded px-2 py-1 text-xs">
+                                                <option value="">Select...</option>
+                                                <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                                            </select>
+                                        </td>
+                                        <td class="px-4 py-2">
+                                            <select v-model="newExpense.frequency" class="w-full border border-gray-300 rounded px-2 py-1 text-xs">
+                                                <option value="monthly">monthly</option>
+                                                <option value="yearly">yearly</option>
+                                                <option value="one-time">one-time</option>
+                                            </select>
+                                        </td>
+                                        <td class="px-4 py-2">
+                                            <input v-model="newExpense.start_date" type="text" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="w-full border border-gray-300 rounded px-2 py-1 text-xs tabular-nums">
+                                        </td>
+                                        <td class="px-4 py-2">
+                                            <input v-model="newExpense.end_date" type="text" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="w-full border border-gray-300 rounded px-2 py-1 text-xs tabular-nums">
+                                        </td>
+                                        <td class="px-4 py-2 text-center"><span class="text-gray-300 text-xs">—</span></td>
+                                        <td class="px-4 py-2 text-center">
+                                            <div class="flex justify-center gap-2">
+                                                <button @click="addManualExpense" class="text-xs text-blue-600 font-bold hover:text-blue-800">Save</button>
+                                                <button @click="addingManualInline = false" class="text-xs text-gray-500 font-bold hover:text-gray-700">Cancel</button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                    <!-- Data rows -->
+                                    <template v-for="exp in filteredManual" :key="exp.id">
+                                        <!-- Editing row -->
+                                        <tr v-if="editingExpense && editingExpense.id === exp.id" class="bg-blue-50/30">
+                                            <td class="px-4 py-2">
+                                                <input v-model="editingExpense.description" class="w-full border border-gray-300 rounded px-2 py-1 text-sm focus:ring-2 focus:ring-blue-400 focus:border-blue-400">
+                                            </td>
+                                            <td class="px-4 py-2">
+                                                <input v-model.number="editingExpense.amount" type="number" step="0.01" class="w-full border border-gray-300 rounded px-2 py-1 text-sm text-right focus:ring-2 focus:ring-blue-400">
+                                            </td>
+                                            <td class="px-4 py-2 text-right text-sm text-gray-400 tabular-nums">
+                                                ${{ formatAmount(manualMonthlyCost(editingExpense)) }}
+                                            </td>
+                                            <td class="px-4 py-2">
+                                                <select v-model="editingExpense.category" class="w-full border border-gray-300 rounded px-2 py-1 text-xs">
+                                                    <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                                                </select>
+                                            </td>
+                                            <td class="px-4 py-2">
+                                                <select v-model="editingExpense.frequency" class="w-full border border-gray-300 rounded px-2 py-1 text-xs">
+                                                    <option value="monthly">monthly</option>
+                                                    <option value="yearly">yearly</option>
+                                                    <option value="one-time">one-time</option>
+                                                </select>
+                                            </td>
+                                            <td class="px-4 py-2">
+                                                <input v-model="editingExpense.start_date" type="text" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="w-full border border-gray-300 rounded px-2 py-1 text-xs tabular-nums">
+                                            </td>
+                                            <td class="px-4 py-2">
+                                                <input v-model="editingExpense.end_date" type="text" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="w-full border border-gray-300 rounded px-2 py-1 text-xs tabular-nums">
+                                            </td>
+                                            <td class="px-4 py-2 text-center"><span class="text-gray-300 text-xs">—</span></td>
+                                            <td class="px-4 py-2 text-center">
+                                                <div class="flex justify-center gap-2">
+                                                    <button @click="saveManualExpense" class="text-xs text-blue-600 font-bold hover:text-blue-800">Save</button>
+                                                    <button @click="editingExpense = null" class="text-xs text-gray-500 font-bold hover:text-gray-700">Cancel</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                        <!-- Display row -->
+                                        <tr v-else class="transition-colors hover:bg-gray-50/80">
+                                            <td class="px-4 py-3 text-sm text-gray-900 font-medium">{{ exp.description }}</td>
+                                            <td class="px-4 py-3 text-sm text-right font-bold text-gray-900 tabular-nums">
+                                                ${{ formatAmount(exp.amount) }}
+                                                <span class="text-[10px] text-gray-400 font-normal">{{ exp.frequency === 'monthly' ? '/mo' : exp.frequency === 'yearly' ? '/yr' : '' }}</span>
+                                            </td>
+                                            <td class="px-4 py-3 text-sm text-right font-bold tabular-nums" :class="manualIsActive(exp) ? 'text-blue-600' : 'text-gray-300'">
+                                                ${{ formatAmount(manualMonthlyCost(exp)) }}
+                                            </td>
+                                            <td class="px-4 py-3">
+                                                <span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-[10px] font-bold">{{ exp.category }}</span>
+                                            </td>
+                                            <td class="px-4 py-3">
+                                                <span class="bg-gray-100 px-1.5 py-0.5 rounded text-[10px] font-bold text-gray-500">{{ exp.frequency }}</span>
+                                            </td>
+                                            <td class="px-4 py-3 text-sm text-gray-500 tabular-nums whitespace-nowrap">{{ exp.start_date }}</td>
+                                            <td class="px-4 py-3 text-sm text-gray-500 tabular-nums whitespace-nowrap">
+                                                {{ exp.end_date || '' }}
+                                                <span v-if="!exp.end_date" class="text-gray-200">—</span>
+                                            </td>
+                                            <td class="px-4 py-3 text-center">
+                                                <span :class="manualIsActive(exp) ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-400'"
+                                                      class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase">
+                                                    {{ manualIsActive(exp) ? 'Active' : 'Past' }}
+                                                </span>
+                                            </td>
+                                            <td class="px-4 py-3 text-center">
+                                                <div class="flex justify-center gap-3">
+                                                    <button @click="editManualExpense(exp)" class="text-xs text-blue-600 font-bold hover:text-blue-800">Edit</button>
+                                                    <button @click="deleteManualExpense(exp)" class="text-xs text-red-500 font-bold hover:text-red-700">Remove</button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                    <tr v-if="filteredManual.length === 0 && !addingManualInline">
+                                        <td colspan="9" class="px-4 py-12 text-center text-gray-400">No manual expenses match your filters.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+{% endraw %}
+{% endblock %}
+
+{% block overlays %}
+{% raw %}
+        <!-- ==================== TRANSACTION DETAIL MODAL ==================== -->
+        <Transition name="modal-fade">
+            <div v-if="selectedTx" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="selectedTx = null">
+                <div class="fixed inset-0 bg-black/30"></div>
+                <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto" @click.stop>
+                    <button @click="selectedTx = null" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+                    <h2 class="text-lg font-bold text-gray-900 mb-4">Transaction Details</h2>
+
+                    <div class="space-y-4">
+                        <!-- Read-only info -->
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Date</p>
+                                <p class="text-sm font-semibold text-gray-900">{{ selectedTx.date }}</p>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Amount</p>
+                                <p class="text-lg font-black text-gray-900">${{ formatAmount(selectedTx.amount) }}</p>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Source</p>
+                                <p class="text-sm font-semibold" :class="selectedTx.source === 'MANUAL' ? 'text-purple-600' : 'text-gray-700'">{{ selectedTx.source }}</p>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Status</p>
+                                <span :class="selectedTx.needs_review ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'"
+                                      class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase">
+                                    {{ selectedTx.needs_review ? 'Needs Review' : 'Reviewed' }}
+                                </span>
+                            </div>
+                        </div>
+
+                        <!-- Description -->
+                        <div>
+                            <p class="text-[10px] font-bold text-gray-400 uppercase mb-1">Description</p>
+                            <p class="text-sm text-gray-900 bg-gray-50 p-3 rounded-lg">{{ selectedTx.description }}</p>
+                        </div>
+
+                        <!-- Editable: Category -->
+                        <div v-if="!isManualTx(selectedTx)">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase mb-1">Category</p>
+                            <select :value="selectedTx.category"
+                                    @change="updateCategory(selectedTx, $event)"
+                                    class="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold focus:ring-2 focus:ring-blue-400 focus:border-blue-400">
+                                <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                            </select>
+                        </div>
+
+                        <!-- Editable: Trip -->
+                        <div v-if="!isManualTx(selectedTx)">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase mb-1">Trip / Event</p>
+                            <select :value="selectedTx.trip_id ?? 'null'"
+                                    @change="updateTrip(selectedTx, $event)"
+                                    class="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold focus:ring-2 focus:ring-blue-400 focus:border-blue-400">
+                                <option :value="'null'">None</option>
+                                <option v-for="trip in tripsList" :key="trip.id" :value="trip.id">
+                                    {{ trip.name }}
+                                </option>
+                            </select>
+                        </div>
+
+                        <!-- Review toggle -->
+                        <div v-if="!isManualTx(selectedTx)" class="pt-2 border-t border-gray-100">
+                            <button @click="toggleReview(selectedTx)"
+                                    :class="selectedTx.needs_review ? 'bg-orange-100 text-orange-700 hover:bg-orange-200' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+                                    class="w-full py-2 rounded-lg text-sm font-bold transition-colors">
+                                <span v-html="selectedTx.needs_review ? '&#9888;' : '&#10003;'"></span>
+                                {{ selectedTx.needs_review ? 'Needs Review — Click to Clear' : 'Reviewed — Click to Flag' }}
+                            </button>
+                        </div>
+
+                        <!-- Source document (PDF/image embed) — not shown for Amazon -->
+                        <div v-if="selectedTx._loadingDoc && selectedTx.source !== 'Amazon'" class="pt-2 border-t border-gray-100">
+                            <p class="text-xs text-gray-400 animate-pulse">Loading source document...</p>
+                        </div>
+                        <div v-else-if="selectedTx.source_file_path && selectedTx.source !== 'Amazon'" class="pt-2 border-t border-gray-100">
+                            <button @click="selectedTx._showPdf = !selectedTx._showPdf"
+                                    class="flex items-center gap-2 text-[10px] font-bold text-gray-400 uppercase hover:text-gray-600 transition-colors mb-2">
+                                <span v-html="selectedTx._showPdf ? '&#9660;' : '&#9654;'"></span>
+                                Source Statement
+                                <span class="font-normal text-gray-300 truncate max-w-xs" :title="selectedTx.source_file_path">{{ selectedTx.source_file_path }}</span>
+                            </button>
+                            <iframe v-if="selectedTx._showPdf" :src="'/api/workspace/file?path=' + encodeURIComponent(selectedTx.source_file_path)" class="w-full h-[60vh] rounded-lg border border-gray-200"></iframe>
+                        </div>
+
+                        <!-- Metadata (if available) -->
+                        <div v-if="selectedTx.metadata && typeof selectedTx.metadata === 'object'" class="pt-2 border-t border-gray-100">
+                            <button @click="selectedTx._showMeta = !selectedTx._showMeta"
+                                    class="text-[10px] font-bold text-gray-400 uppercase hover:text-gray-600 transition-colors mb-1">
+                                <span v-html="selectedTx._showMeta ? '&#9660;' : '&#9654;'"></span> Extra Details
+                            </button>
+                            <pre v-if="selectedTx._showMeta" class="text-xs text-gray-600 bg-gray-50 p-3 rounded-lg overflow-x-auto max-h-32 mt-1">{{ JSON.stringify(selectedTx.metadata, null, 2) }}</pre>
+                        </div>
+
+                        <!-- Manual expense link -->
+                        <div v-if="isManualTx(selectedTx)" class="pt-2 border-t border-gray-100">
+                            <button @click="selectedTx = null; showManualPanel = true"
+                                    class="w-full py-2 bg-purple-50 text-purple-700 rounded-lg text-sm font-bold hover:bg-purple-100 transition-colors">
+                                This is a manual expense — Manage Templates
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </Transition>
+
+        <!-- ==================== MANUAL EXPENSES PANEL ==================== -->
+        <Transition name="panel-slide">
+            <div v-if="showManualPanel" class="fixed inset-0 z-40">
+                <div class="fixed inset-0 bg-black/20" @click="showManualPanel = false"></div>
+                <div class="fixed right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl overflow-y-auto z-50 flex flex-col">
+                    <!-- Panel Header -->
+                    <div class="p-5 border-b flex justify-between items-center shrink-0">
+                        <h2 class="text-lg font-bold text-gray-900">Manual Expenses</h2>
+                        <button @click="showManualPanel = false" class="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+                    </div>
+                    <!-- Monthly Impact -->
+                    <div class="px-5 py-4 border-b bg-blue-50/70 shrink-0">
+                        <p class="text-[10px] font-bold text-blue-400 uppercase tracking-wider">Est. Monthly Impact</p>
+                        <p class="text-2xl font-black text-blue-700">${{ formatAmount(monthlyManualCost) }}</p>
+                        <p class="text-[10px] text-blue-400">{{ manualExpenses.length }} expense{{ manualExpenses.length !== 1 ? 's' : '' }} defined</p>
+                    </div>
+                    <!-- Expense Cards -->
+                    <div class="flex-1 overflow-y-auto p-5 space-y-3">
+                        <div v-for="exp in manualExpenses" :key="exp.id" class="bg-white rounded-xl border border-gray-200 p-4 shadow-sm">
+                            <template v-if="editingExpense && editingExpense.id === exp.id">
+                                <!-- Editing mode -->
+                                <div class="space-y-2.5">
+                                    <input v-model="editingExpense.description" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-medium focus:ring-2 focus:ring-blue-400 focus:border-blue-400" placeholder="Description">
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label class="text-[10px] text-gray-400 block mb-0.5">Amount</label>
+                                            <input v-model.number="editingExpense.amount" type="number" step="0.01" class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-blue-400 focus:border-blue-400">
+                                        </div>
+                                        <div>
+                                            <label class="text-[10px] text-gray-400 block mb-0.5">Frequency</label>
+                                            <select v-model="editingExpense.frequency" class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                                                <option value="one-time">One-time</option>
+                                                <option value="monthly">Monthly</option>
+                                                <option value="yearly">Yearly</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="text-[10px] text-gray-400 block mb-0.5">Category</label>
+                                        <select v-model="editingExpense.category" class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                                            <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                                        </select>
+                                    </div>
+                                    <div class="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label class="text-[10px] text-gray-400 block mb-0.5">Start</label>
+                                            <input v-model="editingExpense.start_date" type="text" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm tabular-nums">
+                                        </div>
+                                        <div>
+                                            <label class="text-[10px] text-gray-400 block mb-0.5">End</label>
+                                            <input v-model="editingExpense.end_date" type="text" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm tabular-nums">
+                                        </div>
+                                    </div>
+                                    <div class="flex gap-2 pt-1">
+                                        <button @click="saveManualExpense" class="flex-1 bg-blue-600 text-white rounded-lg px-3 py-2 text-sm font-bold hover:bg-blue-700">Save</button>
+                                        <button @click="editingExpense = null" class="flex-1 bg-gray-100 text-gray-600 rounded-lg px-3 py-2 text-sm font-bold hover:bg-gray-200">Cancel</button>
+                                    </div>
+                                </div>
+                            </template>
+                            <template v-else>
+                                <!-- Display mode -->
+                                <div class="flex justify-between items-start">
+                                    <div class="min-w-0">
+                                        <h4 class="font-bold text-gray-900 text-sm truncate">{{ exp.description }}</h4>
+                                        <div class="flex items-center gap-2 mt-1">
+                                            <span class="bg-blue-50 text-blue-700 px-2 py-0.5 rounded-full text-[10px] font-bold">{{ exp.category }}</span>
+                                            <span class="bg-gray-100 px-1.5 py-0.5 rounded text-[10px] font-bold text-gray-500">{{ exp.frequency }}</span>
+                                        </div>
+                                        <p class="text-[10px] text-gray-400 mt-1">Since {{ exp.start_date }}{{ exp.end_date ? ' until ' + exp.end_date : '' }}</p>
+                                    </div>
+                                    <div class="text-right shrink-0 ml-3">
+                                        <p class="text-lg font-black text-gray-900">${{ formatAmount(exp.amount) }}</p>
+                                        <span v-if="exp.frequency === 'monthly'" class="text-[10px] text-gray-400">/mo</span>
+                                        <span v-else-if="exp.frequency === 'yearly'" class="text-[10px] text-gray-400">/yr</span>
+                                    </div>
+                                </div>
+                                <div class="flex gap-3 mt-3 pt-3 border-t border-gray-100">
+                                    <button @click="editManualExpense(exp)" class="text-xs text-blue-600 font-bold hover:text-blue-800">Edit</button>
+                                    <button @click="deleteManualExpense(exp)" class="text-xs text-red-500 font-bold hover:text-red-700">Remove</button>
+                                </div>
+                            </template>
+                        </div>
+
+                        <div v-if="manualExpenses.length === 0 && !addingManual" class="text-center py-8 text-gray-400 text-sm">
+                            No manual expenses defined yet.
+                        </div>
+
+                        <!-- Add New Form -->
+                        <div v-if="addingManual" class="bg-gray-50 rounded-xl border-2 border-dashed border-gray-300 p-4">
+                            <h4 class="font-bold text-sm text-gray-700 mb-3">New Expense</h4>
+                            <div class="space-y-2.5">
+                                <input v-model="newExpense.description" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-400 focus:border-blue-400" placeholder="Description">
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="text-[10px] text-gray-400 block mb-0.5">Amount</label>
+                                        <input v-model.number="newExpense.amount" type="number" step="0.01" class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                                    </div>
+                                    <div>
+                                        <label class="text-[10px] text-gray-400 block mb-0.5">Frequency</label>
+                                        <select v-model="newExpense.frequency" class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                                            <option value="one-time">One-time</option>
+                                            <option value="monthly">Monthly</option>
+                                            <option value="yearly">Yearly</option>
+                                        </select>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label class="text-[10px] text-gray-400 block mb-0.5">Category</label>
+                                    <select v-model="newExpense.category" class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm">
+                                        <option value="">Select...</option>
+                                        <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                                    </select>
+                                </div>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <div>
+                                        <label class="text-[10px] text-gray-400 block mb-0.5">Start Date</label>
+                                        <input v-model="newExpense.start_date" type="text" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm tabular-nums">
+                                    </div>
+                                    <div>
+                                        <label class="text-[10px] text-gray-400 block mb-0.5">End Date (opt.)</label>
+                                        <input v-model="newExpense.end_date" type="text" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="w-full border border-gray-300 rounded-lg px-3 py-1.5 text-sm tabular-nums">
+                                    </div>
+                                </div>
+                                <div class="flex gap-2 pt-1">
+                                    <button @click="addManualExpense" class="flex-1 bg-blue-600 text-white rounded-lg px-3 py-2 text-sm font-bold hover:bg-blue-700">Add</button>
+                                    <button @click="addingManual = false" class="flex-1 bg-gray-100 text-gray-600 rounded-lg px-3 py-2 text-sm font-bold hover:bg-gray-200">Cancel</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Panel Footer: Add button -->
+                    <div v-if="!addingManual" class="p-4 border-t shrink-0">
+                        <button @click="addingManual = true"
+                                class="w-full py-2.5 bg-blue-600 text-white rounded-xl text-sm font-bold hover:bg-blue-700 transition-colors flex items-center justify-center gap-2">
+                            <span class="text-lg leading-none">+</span> Add Manual Expense
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </Transition>
+{% endraw %}
+{% endblock %}
+
+{% block vue_app %}
+        createApp({
+            setup() {
+                // ==================== DEFAULTS ====================
+                const defaultStart = '{{ one_year_ago }}';
+                const defaultEnd = '{{ max_date }}';
+
+                // ==================== DATE PRESETS ====================
+                const todayDate = new Date();
+                const todayStr = todayDate.toISOString().slice(0, 10);
+                const yr = todayDate.getFullYear();
+                const sixMo = new Date(todayDate); sixMo.setMonth(sixMo.getMonth() - 6);
+                const twelveMo = new Date(todayDate); twelveMo.setFullYear(twelveMo.getFullYear() - 1);
+
+                const datePresets = [
+                    { label: 'YTD', from: `${yr}-01-01`, to: todayStr },
+                    { label: 'Last 12 mo', from: twelveMo.toISOString().slice(0, 10), to: todayStr },
+                    { label: 'Last 6 mo', from: sixMo.toISOString().slice(0, 10), to: todayStr },
+                    { label: String(yr - 1), from: `${yr - 1}-01-01`, to: `${yr - 1}-12-31` },
+                    { label: String(yr - 2), from: `${yr - 2}-01-01`, to: `${yr - 2}-12-31` },
+                ];
+
+                // ==================== URL STATE ====================
+                const loadFromUrl = () => {
+                    const p = new URLSearchParams(window.location.hash.slice(1));
+                    return {
+                        view: p.get('view') || 'spending',
+                        startDate: p.get('from') || defaultStart,
+                        endDate: p.get('to') || defaultEnd,
+                        category: p.get('cat') || '',
+                        search: p.get('q') || '',
+                        source: p.get('src') || '',
+                        tripId: p.get('trip') ? parseInt(p.get('trip')) : null,
+                        onlyReview: p.get('review') === '1',
+                        sortKey: (p.get('sort') || 'date:desc').split(':')[0],
+                        sortDir: (p.get('sort') || 'date:desc').split(':')[1] || 'desc',
+                        page: parseInt(p.get('page') || '1'),
+                    };
+                };
+
+                const syncToUrl = () => {
+                    const p = new URLSearchParams();
+                    if (view.value !== 'spending') p.set('view', view.value);
+                    if (filters.value.startDate !== defaultStart) p.set('from', filters.value.startDate);
+                    if (filters.value.endDate !== defaultEnd) p.set('to', filters.value.endDate);
+                    if (filters.value.category) p.set('cat', filters.value.category);
+                    if (filters.value.search) p.set('q', filters.value.search);
+                    if (filters.value.source) p.set('src', filters.value.source);
+                    if (filters.value.tripId) p.set('trip', filters.value.tripId);
+                    if (filters.value.onlyReview) p.set('review', '1');
+                    if (sortKey.value !== 'date' || sortDir.value !== 'desc') p.set('sort', `${sortKey.value}:${sortDir.value}`);
+                    if (page.value > 1) p.set('page', page.value);
+                    const hash = p.toString();
+                    history.replaceState(null, '', hash ? `#${hash}` : window.location.pathname);
+                };
+
+                // ==================== STATE ====================
+                const initial = loadFromUrl();
+                const view = ref(initial.view);
+                const loading = ref(true);
+                const selectedTx = ref(null);
+                const showManualPanel = ref(false);
+                const addingManual = ref(false);
+                const editingExpense = ref(null);
+
+                const allTransactions = ref([]);
+                const categories = ref([]);
+                const tripsList = ref([]);
+                const tripSummaries = ref([]);
+                const workTripSummaries = ref([]);
+                const manualExpenses = ref([]);
+
+                const filters = ref({
+                    startDate: initial.startDate,
+                    endDate: initial.endDate,
+                    category: initial.category,
+                    search: initial.search,
+                    source: initial.source,
+                    tripId: initial.tripId,
+                    onlyReview: initial.onlyReview,
+                });
+
+                const sortKey = ref(initial.sortKey);
+                const sortDir = ref(initial.sortDir);
+                const page = ref(initial.page);
+                const pageSize = 50;
+
+                const newExpense = ref({
+                    description: '', amount: 0, category: '',
+                    start_date: '', end_date: '', frequency: 'monthly'
+                });
+
+                const addingManualInline = ref(false);
+                const manualSortKey = ref('monthlyCost');
+                const manualSortDir = ref('desc');
+                const manualFilters = ref({ category: '', frequency: '', status: '' });
+
+                // ==================== COMPUTED ====================
+                const activePreset = computed(() => {
+                    const match = datePresets.find(p => p.from === filters.value.startDate && p.to === filters.value.endDate);
+                    return match ? match.label : null;
+                });
+
+                const sources = computed(() => [...new Set(allTransactions.value.map(t => t.source))].sort());
+
+                const hasActiveFilters = computed(() =>
+                    filters.value.category || filters.value.search || filters.value.source || filters.value.tripId || filters.value.onlyReview
+                );
+
+                const sortedTransactions = computed(() => {
+                    const data = [...allTransactions.value];
+                    return data.sort((a, b) => {
+                        let valA = a[sortKey.value], valB = b[sortKey.value];
+                        if (valA == null) valA = '';
+                        if (valB == null) valB = '';
+                        if (sortKey.value === 'amount') { valA = parseFloat(valA); valB = parseFloat(valB); }
+                        else { valA = valA.toString().toLowerCase(); valB = valB.toString().toLowerCase(); }
+                        if (valA < valB) return sortDir.value === 'asc' ? -1 : 1;
+                        if (valA > valB) return sortDir.value === 'asc' ? 1 : -1;
+                        return 0;
+                    });
+                });
+
+                const filteredTransactions = computed(() => {
+                    return sortedTransactions.value.filter(tx => {
+                        if (filters.value.tripId) {
+                            if (tx.trip_id != filters.value.tripId) return false;
+                        } else {
+                            if (filters.value.startDate && tx.date < filters.value.startDate) return false;
+                            if (filters.value.endDate && tx.date > filters.value.endDate) return false;
+                        }
+                        if (filters.value.category && tx.category !== filters.value.category) return false;
+                        if (filters.value.source && tx.source !== filters.value.source) return false;
+                        if (filters.value.onlyReview && !tx.needs_review) return false;
+                        if (filters.value.search && !tx.description.toLowerCase().includes(filters.value.search.toLowerCase())) return false;
+                        return true;
+                    });
+                });
+
+                const paginatedTransactions = computed(() => {
+                    const start = (page.value - 1) * pageSize;
+                    return filteredTransactions.value.slice(start, start + pageSize);
+                });
+
+                const totalPages = computed(() => Math.max(1, Math.ceil(filteredTransactions.value.length / pageSize)));
+
+                const visiblePages = computed(() => {
+                    const total = totalPages.value;
+                    const curr = page.value;
+                    if (total <= 7) return Array.from({length: total}, (_, i) => i + 1);
+                    const pages = [1];
+                    if (curr > 3) pages.push('...');
+                    for (let i = Math.max(2, curr - 1); i <= Math.min(total - 1, curr + 1); i++) pages.push(i);
+                    if (curr < total - 2) pages.push('...');
+                    if (total > 1) pages.push(total);
+                    return pages;
+                });
+
+                const stats = computed(() => {
+                    const personal = filteredTransactions.value.filter(t => t.category !== 'Work (Reimbursable)');
+                    const total = personal.reduce((s, tx) => s + tx.amount, 0);
+                    const catMap = {};
+                    personal.forEach(tx => { catMap[tx.category] = (catMap[tx.category] || 0) + tx.amount; });
+                    let topCat = '', topAmt = 0;
+                    for (const [cat, amt] of Object.entries(catMap)) { if (amt > topAmt) { topCat = cat; topAmt = amt; } }
+                    return { total, topCategory: topCat };
+                });
+
+                const reviewCount = computed(() => filteredTransactions.value.filter(t => t.needs_review).length);
+
+                const filteredPersonalTrips = computed(() => {
+                    return tripSummaries.value.filter(trip => {
+                        const end = trip.end_date ?? filters.value.endDate;
+                        const earliest = trip.earliest_tx_date ?? trip.start_date;
+                        return earliest <= filters.value.endDate && end >= filters.value.startDate;
+                    });
+                });
+
+                const filteredWorkTrips = computed(() => {
+                    return workTripSummaries.value.filter(trip => {
+                        const end = trip.end_date ?? filters.value.endDate;
+                        const earliest = trip.earliest_tx_date ?? trip.start_date;
+                        return earliest <= filters.value.endDate && end >= filters.value.startDate;
+                    });
+                });
+
+                // Manual computed
+                const monthlyManualCost = computed(() => {
+                    return manualExpenses.value.reduce((sum, exp) => {
+                        if (!manualIsActive(exp)) return sum;
+                        if (exp.frequency === 'monthly') return sum + exp.amount;
+                        if (exp.frequency === 'yearly') return sum + exp.amount / 12;
+                        return sum;
+                    }, 0);
+                });
+
+                const yearlyManualCost = computed(() => monthlyManualCost.value * 12);
+
+                const manualIsActive = (exp) => {
+                    if (exp.frequency === 'one-time') return false;
+                    if (!exp.end_date) return true;
+                    return exp.end_date >= todayStr;
+                };
+
+                const manualMonthlyCost = (exp) => {
+                    if (exp.frequency === 'monthly') return exp.amount;
+                    if (exp.frequency === 'yearly') return exp.amount / 12;
+                    return 0;
+                };
+
+                const activeManualCount = computed(() => manualExpenses.value.filter(e => manualIsActive(e)).length);
+                const pastManualCount = computed(() => manualExpenses.value.filter(e => !manualIsActive(e)).length);
+
+                const topManualCategories = computed(() => {
+                    const catMap = {};
+                    manualExpenses.value.forEach(exp => {
+                        if (!manualIsActive(exp)) return;
+                        const mc = manualMonthlyCost(exp);
+                        catMap[exp.category] = (catMap[exp.category] || 0) + mc;
+                    });
+                    return Object.entries(catMap)
+                        .sort((a, b) => b[1] - a[1])
+                        .slice(0, 3)
+                        .map(([name, monthly]) => ({ name, monthly }));
+                });
+
+                const filteredManual = computed(() => {
+                    let data = [...manualExpenses.value];
+                    if (manualFilters.value.category) data = data.filter(e => e.category === manualFilters.value.category);
+                    if (manualFilters.value.frequency) data = data.filter(e => e.frequency === manualFilters.value.frequency);
+                    if (manualFilters.value.status === 'active') data = data.filter(e => manualIsActive(e));
+                    if (manualFilters.value.status === 'past') data = data.filter(e => !manualIsActive(e));
+
+                    const key = manualSortKey.value;
+                    const dir = manualSortDir.value;
+                    data.sort((a, b) => {
+                        let valA, valB;
+                        if (key === 'monthlyCost') { valA = manualMonthlyCost(a); valB = manualMonthlyCost(b); }
+                        else if (key === 'amount') { valA = a.amount; valB = b.amount; }
+                        else if (key === 'status') { valA = manualIsActive(a) ? 0 : 1; valB = manualIsActive(b) ? 0 : 1; }
+                        else { valA = (a[key] || '').toString().toLowerCase(); valB = (b[key] || '').toString().toLowerCase(); }
+                        if (valA < valB) return dir === 'asc' ? -1 : 1;
+                        if (valA > valB) return dir === 'asc' ? 1 : -1;
+                        const aa = manualIsActive(a) ? 0 : 1, ab = manualIsActive(b) ? 0 : 1;
+                        return aa - ab;
+                    });
+                    return data;
+                });
+
+                // ==================== HELPERS ====================
+                const formatAmount = (val) => {
+                    if (val == null) return '0.00';
+                    return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                };
+
+                const isManualTx = (tx) => String(tx.id).startsWith('manual_');
+
+                // ==================== DATA FETCHING ====================
+                const fetchData = async () => {
+                    try {
+                        const params = new URLSearchParams();
+                        if (filters.value.tripId) {
+                            params.set('trip_id', filters.value.tripId);
+                        } else {
+                            params.set('start_date', filters.value.startDate);
+                            params.set('end_date', filters.value.endDate);
+                        }
+                        const res = await apiFetch(`/api/spending/data?${params}`);
+                        const data = await res.json();
+                        allTransactions.value = data.transactions;
+                        categories.value = data.categories;
+                        tripsList.value = data.trips;
+                        tripSummaries.value = data.trip_summaries;
+                        workTripSummaries.value = data.work_trip_summaries || [];
+                        loading.value = false;
+                    } catch (e) { console.error("Fetch failed", e); }
+                };
+
+                const fetchManualExpenses = async () => {
+                    try {
+                        const res = await apiFetch('/api/manual_expenses');
+                        manualExpenses.value = await res.json();
+                    } catch (e) { console.error("Failed to fetch manual expenses", e); }
+                };
+
+                // ==================== ACTIONS ====================
+                const applyPreset = (preset) => {
+                    filters.value.startDate = preset.from;
+                    filters.value.endDate = preset.to;
+                };
+
+                const clearNonDateFilters = () => {
+                    filters.value.category = '';
+                    filters.value.search = '';
+                    filters.value.source = '';
+                    filters.value.tripId = null;
+                    filters.value.onlyReview = false;
+                    page.value = 1;
+                };
+
+                const sortBy = (key) => {
+                    if (sortKey.value === key) { sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'; }
+                    else { sortKey.value = key; sortDir.value = 'asc'; }
+                };
+
+                const filterByTrip = (trip) => {
+                    if (filters.value.tripId === trip.id) {
+                        filters.value.tripId = null;
+                    } else {
+                        filters.value.tripId = trip.id;
+                        filters.value.category = '';
+                        filters.value.search = '';
+                        filters.value.source = '';
+                    }
+                };
+
+                const openTxModal = async (tx) => {
+                    selectedTx.value = { ...tx, _loadingDoc: true, _showPdf: false, _showMeta: false };
+                    try {
+                        const resp = await apiFetch(`/api/transactions/${tx.id}/detail`);
+                        const data = await resp.json();
+                        if (data.transaction) {
+                            selectedTx.value = {
+                                ...selectedTx.value,
+                                source_file_path: data.transaction.source_file_path,
+                                sidecar_path: data.transaction.sidecar_path,
+                                metadata: data.transaction.metadata,
+                                _loadingDoc: false,
+                            };
+                        } else {
+                            selectedTx.value._loadingDoc = false;
+                        }
+                    } catch {
+                        selectedTx.value._loadingDoc = false;
+                    }
+                };
+
+                const toggleReview = async (tx) => {
+                    const needsReview = !Boolean(tx.needs_review);
+                    await apiFetch(`/api/transactions/${tx.id}/review`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ needs_review: needsReview })
+                    });
+                    const orig = allTransactions.value.find(t => t.id === tx.id);
+                    if (orig) orig.needs_review = needsReview;
+                    tx.needs_review = needsReview;
+                    if (selectedTx.value && selectedTx.value.id === tx.id) selectedTx.value.needs_review = needsReview;
+                };
+
+                const updateCategory = async (tx, event) => {
+                    const previous = tx.category;
+                    const newCat = event.target.value;
+                    try {
+                        await apiFetch(`/api/transactions/${tx.id}/category`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ category: newCat })
+                        });
+                        const orig = allTransactions.value.find(t => t.id === tx.id);
+                        if (orig) {
+                            orig.category = newCat;
+                            orig.needs_review = false;
+                        }
+                        tx.category = newCat;
+                        tx.needs_review = false;
+                        if (selectedTx.value && selectedTx.value.id === tx.id) {
+                            selectedTx.value.category = newCat;
+                            selectedTx.value.needs_review = false;
+                        }
+                    } catch (_) {
+                        event.target.value = previous;
+                    }
+                };
+
+                const updateTrip = async (tx, event) => {
+                    const previous = tx.trip_id ?? 'null';
+                    const value = event.target.value;
+                    const parsedId = value === 'null' ? null : parseInt(value);
+                    try {
+                        await apiFetch(`/api/transactions/${tx.id}/trip`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ trip_id: parsedId })
+                        });
+                    } catch (_) {
+                        event.target.value = previous;
+                        return;
+                    }
+                    const tripName = tripsList.value.find(t => t.id === parsedId)?.name || null;
+                    const orig = allTransactions.value.find(t => t.id === tx.id);
+                    if (orig) {
+                        orig.trip_id = parsedId;
+                        orig.trip_name = tripName;
+                    }
+                    tx.trip_id = parsedId;
+                    tx.trip_name = tripName;
+                    if (selectedTx.value && selectedTx.value.id === tx.id) {
+                        selectedTx.value.trip_id = parsedId;
+                        selectedTx.value.trip_name = tripName;
+                    }
+                    const res = await apiFetch(`/api/spending/data?start_date=${filters.value.startDate}&end_date=${filters.value.endDate}`);
+                    const data = await res.json();
+                    tripSummaries.value = data.trip_summaries;
+                    workTripSummaries.value = data.work_trip_summaries || [];
+                };
+
+                // Manual expense actions
+                const addManualExpense = async () => {
+                    if (!newExpense.value.description || !newExpense.value.amount || !newExpense.value.category || !newExpense.value.start_date) return;
+                    await apiFetch('/api/manual_expenses', {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(newExpense.value)
+                    });
+                    newExpense.value = { description: '', amount: 0, category: '', start_date: '', end_date: '', frequency: 'monthly' };
+                    addingManual.value = false;
+                    addingManualInline.value = false;
+                    await fetchManualExpenses();
+                    await fetchData();
+                };
+                const manualSortByFn = (key) => {
+                    if (manualSortKey.value === key) { manualSortDir.value = manualSortDir.value === 'asc' ? 'desc' : 'asc'; }
+                    else { manualSortKey.value = key; manualSortDir.value = key === 'amount' || key === 'monthlyCost' ? 'desc' : 'asc'; }
+                };
+
+                const startAddManual = () => {
+                    addingManualInline.value = true;
+                    newExpense.value = { description: '', amount: 0, category: '', start_date: todayStr, end_date: '', frequency: 'monthly' };
+                };
+
+                const editManualExpense = (exp) => { editingExpense.value = { ...exp }; };
+                const saveManualExpense = async () => {
+                    const e = editingExpense.value;
+                    await apiFetch(`/api/manual_expenses/${e.id}`, {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(e)
+                    });
+                    editingExpense.value = null;
+                    await fetchManualExpenses();
+                    await fetchData();
+                };
+                const deleteManualExpense = async (exp) => {
+                    if (!confirm(`Remove "${exp.description}"?`)) return;
+                    await apiFetch(`/api/manual_expenses/${exp.id}`, { method: 'DELETE' });
+                    await fetchManualExpenses();
+                    await fetchData();
+                };
+
+                // ==================== CHARTS ====================
+                let catChart = null, trendChart = null;
+                const updateCharts = () => {
+                    try {
+                        const SANKEY_SOURCE = 'Total Spend';
+                        const personalTxs = filteredTransactions.value.filter(t => t.category !== 'Work (Reimbursable)');
+                        // catData/monthCatData: used by trend chart below; flows: Sankey data
+                        const catData = {}, monthCatData = {}, allMonths = new Set();
+                        const flows = {};
+
+                        personalTxs.forEach(tx => {
+                            catData[tx.category] = (catData[tx.category] || 0) + tx.amount;
+                            const month = tx.date.substring(0, 7);
+                            allMonths.add(month);
+                            if (!monthCatData[month]) monthCatData[month] = {};
+                            monthCatData[month][tx.category] = (monthCatData[month][tx.category] || 0) + tx.amount;
+
+                            const from = SANKEY_SOURCE;
+                            const to = tx.category;
+                            const key = `${from}::${to}`;
+                            flows[key] = (flows[key] || 0) + tx.amount;
+                        });
+
+                        const sortedCats = Object.entries(catData).sort((a, b) => b[1] - a[1]);
+                        const sortedMonths = [...allMonths].sort();
+
+                        if (catChart) { catChart.destroy(); catChart = null; }
+                        const ctxCat = document.getElementById('categoryChart');
+                        if (ctxCat && personalTxs.length > 0) {
+                            const sankeyData = [];
+                            for (const [key, value] of Object.entries(flows)) {
+                                const [from, to] = key.split('::');
+                                if (value > 0) sankeyData.push({ from, to, flow: value });
+                            }
+
+                            if (sankeyData.length > 0) {
+                                // Node color mapping
+                                const allNodes = [...new Set([...sankeyData.map(d => d.from), ...sankeyData.map(d => d.to)])];
+                                const colorMap = {};
+                                allNodes.forEach((node, i) => {
+                                    colorMap[node] = CHART_COLORS[i % CHART_COLORS.length];
+                                });
+
+                                // Sankey preferred over doughnut for visual hierarchy of spend flows
+                                catChart = new Chart(ctxCat, {
+                                    type: 'sankey',
+                                    data: {
+                                        datasets: [{
+                                            data: sankeyData,
+                                            colorFrom: (c) => colorMap[c.dataset.data[c.dataIndex]?.from] || '#eee',
+                                            colorTo: (c) => colorMap[c.dataset.data[c.dataIndex]?.to] || '#eee',
+                                            colorMode: 'gradient',
+                                            nodeWidth: 12
+                                        }]
+                                    },
+                                    options: {
+                                        responsive: true,
+                                        maintainAspectRatio: false,
+                                        onClick: (event, elements) => {
+                                            if (elements.length > 0) {
+                                                const d = catChart.data.datasets[0].data[elements[0].index];
+                                                if (d && d.to) {
+                                                    filters.value.category = filters.value.category === d.to ? '' : d.to;
+                                                }
+                                            }
+                                        },
+                                        plugins: {
+                                            legend: { display: false },
+                                            tooltip: {
+                                                callbacks: {
+                                                    label: (ctx) => {
+                                                        const d = ctx.dataset.data[ctx.dataIndex];
+                                                        if (!d) return '';
+                                                        return `${d.from} → ${d.to}: $${d.flow.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        layout: { padding: { top: 10, bottom: 10, left: 70, right: 90 } }
+                                    }
+                                });
+                                requestAnimationFrame(() => { if (catChart) catChart.resize(); });
+                            }
+                        }
+
+                        if (trendChart) { trendChart.destroy(); trendChart = null; }
+                        const ctxTrend = document.getElementById('trendChart');
+                        if (ctxTrend && sortedMonths.length > 0) {
+                            const topCats = sortedCats.slice(0, 6).map(x => x[0]);
+                            const otherCats = Object.keys(catData).filter(c => !topCats.includes(c));
+                            const datasets = topCats.map((cat, i) => ({
+                                label: cat,
+                                data: sortedMonths.map(m => monthCatData[m]?.[cat] || 0),
+                                backgroundColor: CHART_COLORS[i],
+                                borderRadius: 2,
+                            }));
+                            if (otherCats.length > 0) {
+                                datasets.push({
+                                    label: 'Other',
+                                    data: sortedMonths.map(m => otherCats.reduce((s, cat) => s + (monthCatData[m]?.[cat] || 0), 0)),
+                                    backgroundColor: '#94a3b8',
+                                    borderRadius: 2,
+                                });
+                            }
+                            trendChart = new Chart(ctxTrend, {
+                                type: 'bar',
+                                data: { labels: sortedMonths, datasets },
+                                options: {
+                                    responsive: true, maintainAspectRatio: false,
+                                    plugins: {
+                                        legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 9 }, padding: 8 } },
+                                        tooltip: {
+                                            mode: 'index',
+                                            callbacks: {
+                                                label: (ctx) => `${ctx.dataset.label}: $${ctx.raw.toFixed(0)}`,
+                                                footer: (items) => `Total: $${items.reduce((s, i) => s + i.raw, 0).toFixed(0)}`
+                                            }
+                                        }
+                                    },
+                                    scales: {
+                                        x: { stacked: true, grid: { display: false } },
+                                        y: { stacked: true, beginAtZero: true, ticks: { callback: v => '$' + v.toLocaleString() } }
+                                    }
+                                }
+                            });
+                            requestAnimationFrame(() => { if (trendChart) trendChart.resize(); });
+                        }
+                    } catch (err) {
+                        console.warn("Chart update skipped:", err);
+                    }
+                };
+
+                // ==================== WATCHERS ====================
+                const isValidDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+                watch(filters, () => { page.value = 1; syncToUrl(); }, { deep: true });
+                watch([view, sortKey, sortDir, page], () => { syncToUrl(); });
+                watch(view, (v) => { if (v === 'spending') nextTick(updateCharts); });
+
+                let dateFetchTimer = null;
+                watch(() => [filters.value.startDate, filters.value.endDate], ([s, e]) => {
+                    if (filters.value.tripId) return;
+                    clearTimeout(dateFetchTimer);
+                    if (isValidDate(s) && isValidDate(e)) dateFetchTimer = setTimeout(fetchData, 400);
+                });
+                watch(() => filters.value.tripId, () => { fetchData(); });
+
+                watch(filteredTransactions, () => { if (view.value === 'spending') nextTick(updateCharts); }, { deep: true });
+
+                // ==================== LIFECYCLE ====================
+                onMounted(() => { fetchData(); fetchManualExpenses(); });
+
+                return {
+                    view, loading, selectedTx, showManualPanel, addingManual, editingExpense,
+                    allTransactions, categories, tripsList, tripSummaries, workTripSummaries, manualExpenses,
+                    filters, sortKey, sortDir, page, pageSize, newExpense, datePresets,
+                    activePreset, sources, hasActiveFilters, filteredTransactions, paginatedTransactions,
+                    totalPages, visiblePages, stats, reviewCount,
+                    filteredPersonalTrips, filteredWorkTrips,
+                    monthlyManualCost, yearlyManualCost,
+                    activeManualCount, pastManualCount,
+                    topManualCategories, filteredManual,
+                    addingManualInline, manualSortKey, manualSortDir, manualFilters,
+                    formatAmount,
+                    isManualTx, applyPreset, clearNonDateFilters,
+                    sortBy, filterByTrip, openTxModal,
+                    toggleReview, updateCategory, updateTrip,
+                    addManualExpense, editManualExpense, saveManualExpense, deleteManualExpense,
+                    manualSortBy: manualSortByFn, manualIsActive, manualMonthlyCost, startAddManual,
+                };
+            }
+        }).mount('#app');
+{% endblock %}

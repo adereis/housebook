@@ -1,0 +1,23 @@
+{
+  "_comment": "Seed matching criteria per project type. The create-project SOP reads this to bootstrap a new project's match_keywords/match_categories, then the agent refines per project. Copy to $WORKSPACE/config/project_types.json and customize. Keywords are matched case-insensitively against transaction descriptions; categories against the transaction category.",
+  "renovation": {
+    "keywords": [
+      "HOME DEPOT", "LOWES", "FERGUSON", "TILE", "PLUMB", "ELECTRIC",
+      "PERMIT", "CONTRACTOR", "HARDWARE", "PAINT", "LUMBER", "FLOOR",
+      "CABINET", "COUNTERTOP", "FIXTURE"
+    ],
+    "categories": ["Home Improvement", "Professional Services", "Shopping & Retail"]
+  },
+  "event": {
+    "keywords": ["CATERING", "VENUE", "RENTAL", "FLORIST", "DECOR", "INVITATION"],
+    "categories": ["Entertainment", "Dining & Takeout", "Professional Services"]
+  },
+  "vehicle": {
+    "keywords": ["DEALERSHIP", "AUTO PARTS", "TIRE", "MECHANIC", "BODY SHOP", "DMV"],
+    "categories": ["Auto & Fuel", "Professional Services"]
+  },
+  "purchase": {
+    "keywords": [],
+    "categories": ["Shopping & Retail", "Electronics"]
+  }
+}

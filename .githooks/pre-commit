@@ -1,0 +1,38 @@
+#!/bin/bash
+# pre-commit hook: whitespace check + workspace leak scan
+
+# Redirect output to stderr.
+exec 1>&2
+
+# --- Check 1: Trailing whitespace ---
+if git diff --cached --check | grep "trailing whitespace" > /dev/null; then
+    echo "Error: Trailing whitespace detected in the staged changes."
+    echo "Please remove it before committing."
+    git diff --cached --check | grep "trailing whitespace"
+    exit 1
+fi
+echo "✅ Whitespace check passed."
+
+# --- Check 2: real workspace data in the index ---
+# housebook-leak-scan compares everything staged against the live
+# workspace: the PII denylist plus real identifiers, card digits,
+# amounts and date/amount pairs. A denylist alone misses copied rows.
+if [ "$PII_ALLOW" = "true" ]; then
+    echo "⚠️  Leak scan skipped (PII_ALLOW=true)."
+    exit 0
+fi
+
+SCANNER="$(git rev-parse --show-toplevel)/.venv/bin/housebook-leak-scan"
+if [ ! -x "$SCANNER" ]; then
+    echo "❌ $SCANNER not found. Run ./bootstrap.sh (or pip install -e .)."
+    echo "Override: PII_ALLOW=true git commit ..."
+    exit 1
+fi
+if ! "$SCANNER"; then
+    echo ""
+    echo "❌ Real workspace data in staged files (see above)."
+    echo "Override: PII_ALLOW=true git commit ..."
+    exit 1
+fi
+
+exit 0
