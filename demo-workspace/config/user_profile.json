@@ -1,0 +1,27 @@
+{
+    "user_name": "Sterling Ledger",
+    "household_members": [
+        "Sterling",
+        "Penny",
+        "Buck",
+        "Ally"
+    ],
+    "special_notes": "Upper-middle class household with heavy Amazon usage and periodic work travel.",
+    "accounts": [
+        {
+            "name": "Chase Sapphire Reserve",
+            "type": "Credit Card",
+            "owner": "Sterling"
+        },
+        {
+            "name": "Amex Blue Cash Preferred",
+            "type": "Credit Card",
+            "owner": "Penny"
+        },
+        {
+            "name": "Harbor Trust Checking",
+            "type": "Checking",
+            "owner": "Joint"
+        }
+    ]
+}

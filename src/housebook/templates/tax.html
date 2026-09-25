@@ -1,0 +1,682 @@
+{% extends "base.html" %}
+
+{% block title %}Income & Tax — Housebook{% endblock %}
+
+{% block header_rows %}
+{% raw %}
+                <!-- Date presets + date inputs -->
+                <div class="pb-2 flex items-center gap-2 min-w-0 overflow-x-auto no-scrollbar">
+                    <div class="flex items-center gap-1 shrink-0">
+                        <button v-for="preset in datePresets" :key="preset.label"
+                                @click="applyPreset(preset)"
+                                :class="activePreset === preset.label ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400 hover:text-blue-600'"
+                                class="px-2.5 py-1 rounded-lg text-xs font-bold border transition-all">
+                            {{ preset.label }}
+                        </button>
+                    </div>
+                    <div class="flex items-center bg-gray-50 rounded-lg px-2 py-1 text-xs border border-gray-200 shrink-0">
+                        <span class="text-gray-400 mr-1.5">From</span>
+                        <input aria-label="Start date" type="text" v-model="filters.startDate" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="bg-transparent focus:outline-none font-semibold text-gray-700 w-[88px] tabular-nums">
+                        <span class="text-gray-400 mx-1.5">To</span>
+                        <input aria-label="End date" type="text" v-model="filters.endDate" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="bg-transparent focus:outline-none font-semibold text-gray-700 w-[88px] tabular-nums">
+                    </div>
+                </div>
+{% endraw %}
+{% endblock %}
+
+{% block content %}
+{% raw %}
+                <!-- ==================== INCOME & TAX VIEW ==================== -->
+                <div>
+                    <!-- Annual Tax Summary Dashboard -->
+                    <div v-for="[year, data] in filteredTaxSummary" :key="year" class="mb-8">
+                        <div class="flex items-center gap-3 mb-4">
+                            <h3 class="text-xl font-black text-gray-900">{{ year }} Tax Summary</h3>
+                            <span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px] font-bold">{{ data.count }} Docs</span>
+                        </div>
+                        <!-- Top-level KPIs -->
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center">
+                                <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">Gross Income</div>
+                                <div class="text-xl font-black text-green-600">${{ formatAmount(data.grossIncome) }}</div>
+                            </div>
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center">
+                                <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">Total Withheld</div>
+                                <div class="text-xl font-black text-red-600">${{ formatAmount(data.totalWithheld) }}</div>
+                            </div>
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center">
+                                <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">Taxable Income</div>
+                                <div class="text-xl font-black text-gray-900">${{ formatAmount(taxableForYear(year)) }}</div>
+                            </div>
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center">
+                                <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">Effective Rate</div>
+                                <div class="text-xl font-black text-amber-600">{{ effectiveRateForYear(year).toFixed(1) }}%</div>
+                            </div>
+                        </div>
+                        <!-- Detail sections -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                            <!-- Income Breakdown -->
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                                <h4 class="text-[10px] font-black text-gray-500 uppercase tracking-wide mb-2">Income</h4>
+                                <div class="space-y-1.5">
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Domestic (W-2 / 1099)</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(data.domesticIncome) }}</span>
+                                    </div>
+                                    <div v-if="data.dividends" class="flex justify-between">
+                                        <span class="text-sm text-gray-500 pl-3">Dividends</span>
+                                        <span class="text-sm text-gray-600">${{ formatAmount(data.dividends) }}</span>
+                                    </div>
+                                    <div v-if="data.interest" class="flex justify-between">
+                                        <span class="text-sm text-gray-500 pl-3">Interest</span>
+                                        <span class="text-sm text-gray-600">${{ formatAmount(data.interest) }}</span>
+                                    </div>
+                                    <div v-if="data.foreignIncome" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Foreign (Brazil)</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(data.foreignIncome) }}</span>
+                                    </div>
+                                    <div v-if="data.brInterest" class="flex justify-between">
+                                        <span class="text-sm text-gray-500 pl-3">BR Interest</span>
+                                        <span class="text-sm text-gray-600">${{ formatAmount(data.brInterest) }}</span>
+                                    </div>
+                                    <div v-if="data.brPfic" class="flex justify-between">
+                                        <span class="text-sm text-gray-500 pl-3">BR PFIC Gains</span>
+                                        <span class="text-sm text-gray-600">${{ formatAmount(data.brPfic) }}</span>
+                                    </div>
+                                    <div v-if="data.rolloverAmount" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Rollovers (non-taxable)</span>
+                                        <span class="text-sm font-semibold text-gray-400">${{ formatAmount(data.rolloverAmount) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Withholding & Credits -->
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                                <h4 class="text-[10px] font-black text-gray-500 uppercase tracking-wide mb-2">Withholding & Credits</h4>
+                                <div class="space-y-1.5">
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Federal Tax Withheld</span>
+                                        <span class="text-sm font-semibold text-red-600">${{ formatAmount(data.federalWithheld) }}</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">State Tax Withheld</span>
+                                        <span class="text-sm font-semibold text-red-400">${{ formatAmount(data.stateWithheld) }}</span>
+                                    </div>
+                                    <div v-if="data.foreignTaxCredit" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Foreign Tax Credit</span>
+                                        <span class="text-sm font-semibold text-orange-500">${{ formatAmount(data.foreignTaxCredit) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Deductions & Retirement -->
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                                <h4 class="text-[10px] font-black text-gray-500 uppercase tracking-wide mb-2">Deductions & Retirement</h4>
+                                <div class="space-y-1.5">
+                                    <div v-if="data.mortgageInterest" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Mortgage Interest</span>
+                                        <span class="text-sm font-semibold text-blue-600">${{ formatAmount(data.mortgageInterest) }}</span>
+                                    </div>
+                                    <div v-if="data.outstandingPrincipal" class="flex justify-between">
+                                        <span class="text-sm text-gray-500 pl-3">Outstanding Principal</span>
+                                        <span class="text-sm text-gray-600">${{ formatAmount(data.outstandingPrincipal) }}</span>
+                                    </div>
+                                    <div v-if="data.deduction && !data.mortgageInterest" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Other Deductions</span>
+                                        <span class="text-sm font-semibold text-blue-600">${{ formatAmount(data.deduction) }}</span>
+                                    </div>
+                                    <div v-if="data.retirement" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">401(k) Contributions</span>
+                                        <span class="text-sm font-semibold text-purple-600">${{ formatAmount(data.retirement) }}</span>
+                                    </div>
+                                    <div v-if="data.hsa" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">HSA Contributions</span>
+                                        <span class="text-sm font-semibold text-teal-600">${{ formatAmount(data.hsa) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- FBAR -->
+                            <div v-if="data.fbarPeak || data.fbarAccounts" class="bg-white p-4 rounded-xl shadow-sm border border-amber-200">
+                                <h4 class="text-[10px] font-black text-amber-600 uppercase tracking-wide mb-2">FBAR Reporting</h4>
+                                <div class="space-y-1.5">
+                                    <div v-if="data.fbarPeak" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Peak Balance</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(data.fbarPeak) }}</span>
+                                    </div>
+                                    <div v-if="data.fbarYearEnd" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Year-End Balance</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(data.fbarYearEnd) }}</span>
+                                    </div>
+                                    <div v-if="data.fbarAccounts" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Foreign Accounts</span>
+                                        <span class="text-sm font-semibold">{{ data.fbarAccounts }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Tax Estimate Panel -->
+                    <div v-if="taxEstimate && !taxEstimate.error" class="mb-8">
+                        <div class="flex items-center gap-3 mb-4">
+                            <h3 class="text-xl font-black text-gray-900">{{ taxEstimate.year }} Tax Estimate</h3>
+                            <span class="bg-amber-100 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">{{ taxEstimate.filing_status }}</span>
+                        </div>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center">
+                                <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">AGI</div>
+                                <div class="text-xl font-black text-gray-900">${{ formatAmount(taxEstimate.agi) }}</div>
+                            </div>
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center">
+                                <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">Federal Tax</div>
+                                <div class="text-xl font-black text-red-600">${{ formatAmount(taxEstimate.federal.tax_after_credits) }}</div>
+                            </div>
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center"
+                                 :class="taxEstimate.federal.balance > 0 ? 'border-red-300 bg-red-50' : 'border-green-300 bg-green-50'">
+                                <div class="text-[10px] font-bold uppercase mb-1"
+                                     :class="taxEstimate.federal.balance > 0 ? 'text-red-400' : 'text-green-400'">
+                                    Federal {{ taxEstimate.federal.balance > 0 ? 'Owed' : 'Refund' }}
+                                </div>
+                                <div class="text-xl font-black"
+                                     :class="taxEstimate.federal.balance > 0 ? 'text-red-600' : 'text-green-600'">
+                                    ${{ formatAmount(Math.abs(taxEstimate.federal.balance)) }}
+                                </div>
+                            </div>
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center"
+                                 :class="taxEstimate.state.balance > 0 ? 'border-red-300 bg-red-50' : 'border-green-300 bg-green-50'">
+                                <div class="text-[10px] font-bold uppercase mb-1"
+                                     :class="taxEstimate.state.balance > 0 ? 'text-red-400' : 'text-green-400'">
+                                    {{ taxEstimate.state.name }} {{ taxEstimate.state.balance > 0 ? 'Owed' : 'Refund' }}
+                                </div>
+                                <div class="text-xl font-black"
+                                     :class="taxEstimate.state.balance > 0 ? 'text-red-600' : 'text-green-600'">
+                                    ${{ formatAmount(Math.abs(taxEstimate.state.balance)) }}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <!-- Income -->
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                                <h4 class="text-[10px] font-black text-gray-500 uppercase tracking-wide mb-2">Taxable Income</h4>
+                                <div class="space-y-1.5">
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Wages</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(taxEstimate.income.wages) }}</span>
+                                    </div>
+                                    <div v-if="taxEstimate.income.qualified_dividends" class="flex justify-between">
+                                        <span class="text-sm text-gray-500 pl-3">Qualified dividends</span>
+                                        <span class="text-sm text-gray-600">${{ formatAmount(taxEstimate.income.qualified_dividends) }}</span>
+                                    </div>
+                                    <div v-if="taxEstimate.income.ordinary_dividends" class="flex justify-between">
+                                        <span class="text-sm text-gray-500 pl-3">Ordinary dividends</span>
+                                        <span class="text-sm text-gray-600">${{ formatAmount(taxEstimate.income.ordinary_dividends) }}</span>
+                                    </div>
+                                    <div v-if="taxEstimate.income.long_term_gains" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">LT Capital Gains</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(taxEstimate.income.long_term_gains) }}</span>
+                                    </div>
+                                    <div v-if="taxEstimate.income.short_term_gains" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">ST Capital Gains</span>
+                                        <span class="text-sm font-semibold" :class="taxEstimate.income.short_term_gains < 0 ? 'text-green-600' : ''">${{ formatAmount(taxEstimate.income.short_term_gains) }}</span>
+                                    </div>
+                                    <div v-if="taxEstimate.income.brazilian_income" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Brazilian income</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(taxEstimate.income.brazilian_income) }}</span>
+                                    </div>
+                                    <div class="flex justify-between pt-1 border-t border-gray-100">
+                                        <span class="text-sm font-bold text-gray-700">Deduction ({{ taxEstimate.deductions.type }})</span>
+                                        <span class="text-sm font-bold text-blue-600">-${{ formatAmount(taxEstimate.deductions.amount) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Federal Detail -->
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                                <h4 class="text-[10px] font-black text-gray-500 uppercase tracking-wide mb-2">Federal Breakdown</h4>
+                                <div class="space-y-1.5">
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Ordinary income tax</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(taxEstimate.federal.ordinary_tax) }}</span>
+                                    </div>
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">QD + LT CG tax (15%)</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(taxEstimate.federal.preferential_tax) }}</span>
+                                    </div>
+                                    <div v-if="taxEstimate.federal.niit" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">NIIT (3.8%)</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(taxEstimate.federal.niit) }}</span>
+                                    </div>
+                                    <div v-if="taxEstimate.federal.foreign_tax_credit" class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Foreign tax credit</span>
+                                        <span class="text-sm font-semibold text-green-600">-${{ formatAmount(taxEstimate.federal.foreign_tax_credit) }}</span>
+                                    </div>
+                                    <div class="flex justify-between pt-1 border-t border-gray-100">
+                                        <span class="text-sm font-bold text-gray-700">Withheld</span>
+                                        <span class="text-sm font-bold">${{ formatAmount(taxEstimate.federal.withheld) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- State Detail -->
+                            <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+                                <h4 class="text-[10px] font-black text-gray-500 uppercase tracking-wide mb-2">{{ taxEstimate.state.name }} State</h4>
+                                <div class="space-y-1.5">
+                                    <div class="flex justify-between">
+                                        <span class="text-sm text-gray-600">Tax ({{ (taxEstimate.state.rate * 100).toFixed(0) }}% flat)</span>
+                                        <span class="text-sm font-semibold">${{ formatAmount(taxEstimate.state.tax) }}</span>
+                                    </div>
+                                    <div class="flex justify-between pt-1 border-t border-gray-100">
+                                        <span class="text-sm font-bold text-gray-700">Withheld</span>
+                                        <span class="text-sm font-bold">${{ formatAmount(taxEstimate.state.withheld) }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div v-if="filteredTaxSummary.length === 0" class="text-center py-12 text-gray-400">
+                        No tax documents for the selected date range.
+                    </div>
+
+                    <!-- Tax Documents Table -->
+                    <div v-if="filteredTaxDocs.length" class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden mt-6">
+                        <div class="px-5 py-3 border-b border-gray-100 bg-gray-50/50">
+                            <h3 class="font-bold text-gray-700 text-sm">Tax Documents</h3>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-gray-50 text-gray-400 text-[10px] uppercase tracking-widest font-bold border-b border-gray-100">
+                                        <th class="px-2 py-3 w-px text-center">REV</th>
+                                        <th class="px-4 py-3">Year</th>
+                                        <th class="px-4 py-3">Type</th>
+                                        <th class="px-4 py-3">Issuer</th>
+                                        <th class="px-4 py-3">Category</th>
+                                        <th class="px-4 py-3 text-right">Amount</th>
+                                        <th class="px-4 py-3">Status</th>
+                                        <th class="px-2 py-3 w-px"></th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100 text-sm">
+                                    <template v-for="doc in filteredTaxDocs" :key="doc.id">
+                                        <tr :class="doc.needs_review ? 'bg-orange-50/30' : 'hover:bg-gray-50'"
+                                            class="transition-colors group">
+                                            <td class="px-2 py-3 text-center">
+                                                <button @click="toggleTaxReview(doc)"
+                                                        :aria-label="doc.needs_review ? 'Mark ' + doc.document_type + ' reviewed' : 'Flag ' + doc.document_type + ' for review'"
+                                                        :class="doc.needs_review ? 'text-orange-500' : 'text-gray-200 group-hover:text-gray-400'"
+                                                        class="text-base transition-colors" v-html="doc.needs_review ? '&#9888;' : '&#9651;'">
+                                                </button>
+                                            </td>
+                                            <td class="px-4 py-3 font-bold text-gray-900">{{ doc.tax_year }}</td>
+                                            <td class="px-4 py-3">
+                                                <button @click="toggleTaxDetail(doc)"
+                                                        :aria-expanded="expandedTaxId === doc.id"
+                                                        class="text-blue-600 font-semibold hover:text-blue-800">
+                                                    {{ doc.document_type }}
+                                                </button>
+                                            </td>
+                                            <td class="px-4 py-3 text-gray-600">{{ doc.issuer }}</td>
+                                            <td class="px-4 py-3">
+                                                <select :aria-label="'Category for ' + doc.document_type"
+                                                        :value="doc.category"
+                                                        @change="updateTaxCategory(doc, $event)"
+                                                        class="bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider border-none cursor-pointer appearance-none">
+                                                    <option v-for="cat in taxCategories" :key="cat" :value="cat">{{ cat }}</option>
+                                                </select>
+                                            </td>
+                                            <td class="px-4 py-3 text-right font-mono font-bold" :class="doc.amount >= 0 ? 'text-green-600' : 'text-red-600'">
+                                                ${{ formatAmount(doc.amount) }}
+                                            </td>
+                                            <td class="px-4 py-3">
+                                                <span :class="['AGENT_VERIFIED', 'USER_VERIFIED'].includes(doc.status) ? 'bg-green-100 text-green-700' : doc.status === 'RECONCILED' ? 'bg-blue-100 text-blue-700' : 'bg-orange-100 text-orange-700'"
+                                                      class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider whitespace-nowrap">
+                                                    {{ (doc.status || 'UNVERIFIED').replaceAll('_', ' ') }}
+                                                </span>
+                                            </td>
+                                            <td class="px-2 py-3 text-center">
+                                                <button @click="deleteTaxDoc(doc)"
+                                                        :aria-label="'Delete ' + doc.document_type + ' from ' + doc.issuer"
+                                                        class="text-gray-300 hover:text-red-500 transition-colors text-xs" title="Delete">&#10005;</button>
+                                            </td>
+                                        </tr>
+                                        <!-- Expandable detail row -->
+                                        <tr v-if="expandedTaxId === doc.id">
+                                            <td colspan="8" class="px-5 py-4 bg-gray-50/80">
+                                                <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                                    <div v-if="taxDetail(doc, 'federal_tax_withheld')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">Federal Tax Withheld</p>
+                                                        <p class="text-sm font-semibold text-red-600">${{ taxDetail(doc, 'federal_tax_withheld') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'state_tax_withheld')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">State Tax Withheld</p>
+                                                        <p class="text-sm font-semibold text-red-400">${{ taxDetail(doc, 'state_tax_withheld') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'taxable_amount')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">Taxable Amount</p>
+                                                        <p class="text-sm font-semibold">${{ taxDetail(doc, 'taxable_amount') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'distribution_code')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">Distribution Code</p>
+                                                        <p class="text-sm font-semibold">
+                                                            {{ taxDetail(doc, 'distribution_code') }}
+                                                            <span v-if="taxDetail(doc, 'is_rollover')" class="ml-1 bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded text-[9px] font-bold">ROLLOVER</span>
+                                                        </p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'outstanding_principal')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">Outstanding Principal</p>
+                                                        <p class="text-sm font-semibold">${{ taxDetail(doc, 'outstanding_principal') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'real_estate_taxes')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">Real Estate Taxes</p>
+                                                        <p class="text-sm font-semibold">${{ taxDetail(doc, 'real_estate_taxes') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'capital_gains')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">Capital Gains</p>
+                                                        <p class="text-sm font-semibold">${{ taxDetail(doc, 'capital_gains') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetailObj(doc, 'box_12')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">Box 12</p>
+                                                        <div class="flex flex-wrap gap-1.5 mt-1">
+                                                            <span v-for="(val, code) in taxDetailObj(doc, 'box_12')" :key="code"
+                                                                  class="bg-purple-50 text-purple-700 px-2 py-0.5 rounded text-[10px] font-bold">
+                                                                {{ code }}: ${{ val }}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'interest_income')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">Interest Income</p>
+                                                        <p class="text-sm font-semibold">${{ taxDetail(doc, 'interest_income') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'pfic_dispositions')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">PFIC Dispositions</p>
+                                                        <p class="text-sm font-semibold">${{ taxDetail(doc, 'pfic_dispositions') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'pfic_year_end_mtm')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">PFIC Year-End MTM</p>
+                                                        <p class="text-sm font-semibold">${{ taxDetail(doc, 'pfic_year_end_mtm') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'pfic_manual_mtm')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">PFIC Manual MTM</p>
+                                                        <p class="text-sm font-semibold">${{ taxDetail(doc, 'pfic_manual_mtm') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'fbar_peak_balance')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">FBAR Peak Balance</p>
+                                                        <p class="text-sm font-semibold">${{ taxDetail(doc, 'fbar_peak_balance') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'fbar_year_end_balance')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">FBAR Year-End Balance</p>
+                                                        <p class="text-sm font-semibold">${{ taxDetail(doc, 'fbar_year_end_balance') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'exchange_rate_brl_usd')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">BRL/USD Rate</p>
+                                                        <p class="text-sm font-semibold">{{ taxDetail(doc, 'exchange_rate_brl_usd') }}</p>
+                                                    </div>
+                                                    <div v-if="taxDetail(doc, 'IRRF_CDB') || taxDetail(doc, 'IRRF_FUND') || taxDetail(doc, 'IRRF_INTEREST')">
+                                                        <p class="text-[10px] font-bold text-gray-400 uppercase">IRRF Breakdown</p>
+                                                        <div class="flex flex-wrap gap-1.5 mt-1">
+                                                            <span v-if="taxDetail(doc, 'IRRF_CDB')" class="bg-amber-50 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">CDB: ${{ taxDetail(doc, 'IRRF_CDB') }}</span>
+                                                            <span v-if="taxDetail(doc, 'IRRF_FUND')" class="bg-amber-50 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">Funds: ${{ taxDetail(doc, 'IRRF_FUND') }}</span>
+                                                            <span v-if="taxDetail(doc, 'IRRF_INTEREST')" class="bg-amber-50 text-amber-700 px-2 py-0.5 rounded text-[10px] font-bold">Interest: ${{ taxDetail(doc, 'IRRF_INTEREST') }}</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <div v-if="!hasStructuredDetail(doc)" class="mt-2">
+                                                    <p class="text-[10px] font-bold text-gray-400 uppercase mb-1">Raw Data</p>
+                                                    <pre class="text-[10px] bg-white p-2 rounded border border-gray-100 overflow-x-auto max-h-40">{{ JSON.stringify(parsedRawData(doc), null, 2) }}</pre>
+                                                </div>
+                                                <div v-if="doc._source_file_path" class="mt-4">
+                                                    <p class="text-[10px] font-bold text-gray-400 uppercase mb-1">Source Document</p>
+                                                    <p class="text-[10px] text-gray-400 mb-2 truncate" :title="doc._source_file_path">{{ doc._source_file_path }}</p>
+                                                    <iframe :src="'/api/workspace/file?path=' + encodeURIComponent(doc._source_file_path)" class="w-full h-[50vh] rounded-lg border border-gray-200"></iframe>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+{% endraw %}
+{% endblock %}
+
+{% block vue_app %}
+        createApp({
+            setup() {
+                // ==================== DEFAULTS ====================
+                const defaultStart = '{{ one_year_ago }}';
+                const defaultEnd = '{{ max_date }}';
+
+                // ==================== DATE PRESETS ====================
+                const todayDate = new Date();
+                const todayStr = todayDate.toISOString().slice(0, 10);
+                const yr = todayDate.getFullYear();
+                const sixMo = new Date(todayDate); sixMo.setMonth(sixMo.getMonth() - 6);
+                const twelveMo = new Date(todayDate); twelveMo.setFullYear(twelveMo.getFullYear() - 1);
+
+                const datePresets = [
+                    { label: 'YTD', from: `${yr}-01-01`, to: todayStr },
+                    { label: 'Last 12 mo', from: twelveMo.toISOString().slice(0, 10), to: todayStr },
+                    { label: 'Last 6 mo', from: sixMo.toISOString().slice(0, 10), to: todayStr },
+                    { label: String(yr - 1), from: `${yr - 1}-01-01`, to: `${yr - 1}-12-31` },
+                    { label: String(yr - 2), from: `${yr - 2}-01-01`, to: `${yr - 2}-12-31` },
+                ];
+
+                // ==================== URL STATE ====================
+                const loadFromUrl = () => {
+                    const p = new URLSearchParams(window.location.hash.slice(1));
+                    return {
+                        startDate: p.get('from') || defaultStart,
+                        endDate: p.get('to') || defaultEnd,
+                    };
+                };
+
+                const syncToUrl = () => {
+                    const p = new URLSearchParams();
+                    if (filters.value.startDate !== defaultStart) p.set('from', filters.value.startDate);
+                    if (filters.value.endDate !== defaultEnd) p.set('to', filters.value.endDate);
+                    const hash = p.toString();
+                    history.replaceState(null, '', hash ? `#${hash}` : window.location.pathname);
+                };
+
+                // ==================== STATE ====================
+                const initial = loadFromUrl();
+                const loading = ref(true);
+                const expandedTaxId = ref(null);
+
+                const taxDocs = ref([]);
+                const taxEstimate = ref(null);
+
+                const taxCategories = ['Income', 'Income/Interest', 'Retirement', 'Health', 'Deduction', 'Tax Paid', 'Other'];
+
+                const filters = ref({
+                    startDate: initial.startDate,
+                    endDate: initial.endDate,
+                });
+
+                // ==================== TAX COMPUTED ====================
+                const parsedRawData = (doc) => {
+                    if (!doc._parsed) { try { doc._parsed = JSON.parse(doc.raw_data || '{}'); } catch { doc._parsed = {}; } }
+                    return doc._parsed;
+                };
+                const taxDetail = (doc, key) => parsedRawData(doc)[key] || null;
+                const taxDetailObj = (doc, key) => { const v = parsedRawData(doc)[key]; return (v && typeof v === 'object') ? v : null; };
+                const structuredKeys = ['federal_tax_withheld', 'state_tax_withheld', 'taxable_amount', 'distribution_code', 'is_rollover', 'outstanding_principal', 'real_estate_taxes', 'capital_gains', 'box_12', 'interest_income', 'pfic_dispositions', 'pfic_year_end_mtm', 'pfic_manual_mtm', 'fbar_peak_balance', 'IRRF_CDB', 'IRRF_FUND', 'IRRF_INTEREST', 'dividends', 'interest'];
+                const hasStructuredDetail = (doc) => structuredKeys.some(k => parsedRawData(doc)[k] !== undefined);
+
+                const filteredTaxDocs = computed(() => {
+                    const startYear = parseInt(filters.value.startDate.substring(0, 4));
+                    const endYear = parseInt(filters.value.endDate.substring(0, 4));
+                    return taxDocs.value.filter(d => d.tax_year >= startYear && d.tax_year <= endYear);
+                });
+
+                const taxSummary = computed(() => {
+                    const summary = {};
+                    taxDocs.value.forEach(doc => {
+                        if (!summary[doc.tax_year]) {
+                            summary[doc.tax_year] = {
+                                count: 0, domesticIncome: 0, foreignIncome: 0, dividends: 0, interest: 0,
+                                federalWithheld: 0, stateWithheld: 0, foreignTaxCredit: 0,
+                                deduction: 0, retirement: 0, hsa: 0,
+                                mortgageInterest: 0, outstandingPrincipal: 0,
+                                brInterest: 0, brPfic: 0,
+                                fbarPeak: 0, fbarYearEnd: 0, fbarAccounts: 0,
+                                rolloverAmount: 0,
+                            };
+                        }
+                        const s = summary[doc.tax_year]; s.count++;
+                        const rd = parsedRawData(doc);
+                        if (doc.document_type === 'BR-TAX-REPORT') {
+                            s.foreignIncome += doc.amount;
+                            if (rd.interest_income) s.brInterest += parseFloat(rd.interest_income);
+                            s.brPfic += (parseFloat(rd.pfic_dispositions || 0)) + (parseFloat(rd.pfic_year_end_mtm || 0)) + (parseFloat(rd.pfic_manual_mtm || 0));
+                            if (rd.fbar_peak_balance) s.fbarPeak = Math.max(s.fbarPeak, parseFloat(rd.fbar_peak_balance));
+                            if (rd.fbar_year_end_balance) s.fbarYearEnd += parseFloat(rd.fbar_year_end_balance);
+                            if (rd.fbar_num_accounts) s.fbarAccounts += parseInt(rd.fbar_num_accounts);
+                        } else if (['Income', 'Income/Interest', 'Retirement'].includes(doc.category)) {
+                            s.domesticIncome += doc.amount;
+                        }
+                        if (doc.document_type === 'BR-FTC') s.foreignTaxCredit += doc.amount;
+                        if (doc.category === 'Deduction') s.deduction += doc.amount;
+                        if (rd.dividends) s.dividends += parseFloat(rd.dividends);
+                        if (rd.interest) s.interest += parseFloat(rd.interest);
+                        if (rd.federal_tax_withheld) s.federalWithheld += parseFloat(rd.federal_tax_withheld);
+                        if (rd.state_tax_withheld) s.stateWithheld += parseFloat(rd.state_tax_withheld);
+                        if (rd.box_12) {
+                            if (rd.box_12['D']) s.retirement += parseFloat(rd.box_12['D']);
+                            if (rd.box_12['AA']) s.retirement += parseFloat(rd.box_12['AA']);
+                            if (rd.box_12['W']) s.hsa += parseFloat(rd.box_12['W']);
+                        }
+                        if (doc.document_type === '1098') {
+                            s.mortgageInterest += doc.amount;
+                            if (rd.outstanding_principal) s.outstandingPrincipal = parseFloat(rd.outstanding_principal);
+                        }
+                        if (rd.is_rollover) s.rolloverAmount += doc.amount;
+                    });
+                    for (const s of Object.values(summary)) {
+                        s.grossIncome = s.domesticIncome + s.foreignIncome;
+                        s.totalWithheld = s.federalWithheld + s.stateWithheld + s.foreignTaxCredit;
+                        s.estimatedTaxable = s.grossIncome - s.deduction - s.retirement;
+                        s.effectiveRate = s.grossIncome > 0 ? ((s.totalWithheld / s.grossIncome) * 100) : 0;
+                    }
+                    return Object.entries(summary).sort((a, b) => b[0] - a[0]);
+                });
+
+                const filteredTaxSummary = computed(() => {
+                    const startYear = parseInt(filters.value.startDate.substring(0, 4));
+                    const endYear = parseInt(filters.value.endDate.substring(0, 4));
+                    return taxSummary.value.filter(([year]) => year >= startYear && year <= endYear);
+                });
+
+                const activePreset = computed(() => {
+                    const match = datePresets.find(p => p.from === filters.value.startDate && p.to === filters.value.endDate);
+                    return match ? match.label : null;
+                });
+
+                // ==================== HELPERS ====================
+                const taxableForYear = (year) => {
+                    const yr = Number(year);
+                    if (taxEstimate.value && taxEstimate.value.year === yr && !taxEstimate.value.error) {
+                        return taxEstimate.value.taxable_income.total;
+                    }
+                    const entry = taxSummary.value.find(([y]) => Number(y) === yr);
+                    return entry ? entry[1].estimatedTaxable : 0;
+                };
+
+                const effectiveRateForYear = (year) => {
+                    const yr = Number(year);
+                    if (taxEstimate.value && taxEstimate.value.year === yr && !taxEstimate.value.error) {
+                        const totalTax = taxEstimate.value.federal.tax_after_credits + taxEstimate.value.state.tax;
+                        const agi = taxEstimate.value.agi;
+                        return agi > 0 ? (totalTax / agi) * 100 : 0;
+                    }
+                    const entry = taxSummary.value.find(([y]) => Number(y) === yr);
+                    return entry ? entry[1].effectiveRate : 0;
+                };
+
+                const formatAmount = (val) => {
+                    if (val == null) return '0.00';
+                    return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                };
+
+                // ==================== DATA FETCHING ====================
+                const fetchData = async () => {
+                    try {
+                        const res = await apiFetch('/api/tax/data');
+                        const data = await res.json();
+                        taxDocs.value = data.tax_docs || [];
+                        loading.value = false;
+                        const taxYears = [...new Set(taxDocs.value.map(d => d.tax_year))];
+                        if (taxYears.length) {
+                            const latestYear = Math.max(...taxYears);
+                            try {
+                                const estRes = await apiFetch(`/api/tax_estimate?year=${latestYear}`);
+                                taxEstimate.value = await estRes.json();
+                            } catch (e) { console.error("Tax estimate fetch failed", e); }
+                        }
+                    } catch (e) { console.error("Fetch failed", e); }
+                };
+
+                // ==================== ACTIONS ====================
+                const applyPreset = (preset) => {
+                    filters.value.startDate = preset.from;
+                    filters.value.endDate = preset.to;
+                };
+
+                const toggleTaxDetail = async (doc) => {
+                    if (expandedTaxId.value === doc.id) {
+                        expandedTaxId.value = null;
+                        return;
+                    }
+                    expandedTaxId.value = doc.id;
+                    if (!doc._source_file_path) {
+                        try {
+                            const resp = await apiFetch(`/api/tax_docs/${doc.id}`);
+                            const data = await resp.json();
+                            doc._source_file_path = data.source_file_path || null;
+                        } catch { doc._source_file_path = null; }
+                    }
+                };
+                const toggleTaxReview = async (doc) => {
+                    const needsReview = !Boolean(doc.needs_review);
+                    await apiFetch(`/api/tax_docs/${doc.id}/review`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ needs_review: needsReview })
+                    });
+                    doc.needs_review = needsReview ? 1 : 0;
+                    if (!needsReview) doc.status = 'USER_VERIFIED';
+                };
+                const updateTaxCategory = async (doc, event) => {
+                    const newCat = event.target.value;
+                    try {
+                        await apiFetch(`/api/tax_docs/${doc.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ category: newCat }) });
+                        doc.category = newCat;
+                        doc.needs_review = 0;
+                        doc.status = 'USER_VERIFIED';
+                        doc._parsed = null;
+                    } catch (_) {
+                        event.target.value = doc.category;
+                    }
+                };
+                const deleteTaxDoc = async (doc) => {
+                    if (!confirm(`Delete ${doc.document_type} from ${doc.issuer}?`)) return;
+                    await apiFetch(`/api/tax_docs/${doc.id}`, { method: 'DELETE' });
+                    taxDocs.value = taxDocs.value.filter(d => d.id !== doc.id);
+                };
+
+                // ==================== WATCHERS ====================
+                watch(filters, () => { syncToUrl(); }, { deep: true });
+
+                // ==================== LIFECYCLE ====================
+                onMounted(() => { fetchData(); });
+
+                return {
+                    loading, expandedTaxId,
+                    taxDocs, taxEstimate, taxCategories,
+                    filters, datePresets, activePreset,
+                    filteredTaxDocs, filteredTaxSummary, taxSummary,
+                    formatAmount, taxableForYear, effectiveRateForYear,
+                    applyPreset,
+                    toggleTaxDetail, toggleTaxReview, updateTaxCategory, deleteTaxDoc,
+                    parsedRawData, taxDetail, taxDetailObj, hasStructuredDetail,
+                };
+            }
+        }).mount('#app');
+{% endblock %}

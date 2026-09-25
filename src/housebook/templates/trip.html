@@ -1,0 +1,491 @@
+{% extends "base.html" %}
+
+{% block title %}Trip — Housebook{% endblock %}
+
+{% block head_extra %}
+    <script src="/static/vendor/chart.umd.min.js"></script>
+    <script src="/static/vendor/chartjs-chart-sankey.min.js"></script>
+{% endblock %}
+
+{% block header_rows %}
+{% raw %}
+                <div class="py-2 flex items-center gap-3 min-w-0 overflow-x-auto no-scrollbar">
+                    <a href="/spending" class="flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-blue-600 transition-colors shrink-0">
+                        <svg aria-hidden="true" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+                        Back to Spending
+                    </a>
+                    <template v-if="trip">
+                        <span class="text-gray-300">|</span>
+                        <h2 class="text-sm font-black text-gray-900">{{ trip.name }}</h2>
+                        <span v-if="trip.location" class="text-xs text-gray-400">{{ trip.location }}</span>
+                        <span class="text-xs text-gray-400 tabular-nums">{{ trip.start_date }} — {{ trip.end_date }}</span>
+                        <span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-[10px] font-bold">{{ duration }} days</span>
+                    </template>
+                </div>
+{% endraw %}
+{% endblock %}
+
+{% block content %}
+{% raw %}
+                <div v-if="trip">
+                    <!-- KPI Row -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Total Spend</p>
+                            <p class="text-2xl font-black text-gray-900 mt-1">${{ formatAmount(totalSpend) }}</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Per Day</p>
+                            <p class="text-2xl font-black text-blue-600 mt-1">${{ formatAmount(perDay) }}</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Transactions</p>
+                            <p class="text-2xl font-black text-gray-900 mt-1">{{ transactions.length }}</p>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Top Category</p>
+                            <p class="text-2xl font-black text-indigo-600 mt-1 truncate">{{ topCategory }}</p>
+                        </div>
+                    </div>
+
+                    <!-- Charts -->
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 min-w-0">
+                            <h3 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Spend Distribution: Total to Category</h3>
+                            <div v-if="transactions.length === 0" class="chart-container !h-[320px] flex items-center justify-center">
+                                <p class="text-gray-300 text-sm font-semibold">No spending data for this trip</p>
+                            </div>
+                            <div v-else class="chart-container !h-[320px]"><canvas id="categoryChart"></canvas></div>
+                        </div>
+                        <div class="bg-white p-5 rounded-xl shadow-sm border border-gray-100 min-w-0">
+                            <h3 class="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Daily Spend</h3>
+                            <div v-if="transactions.length === 0" class="chart-container flex items-center justify-center">
+                                <p class="text-gray-300 text-sm font-semibold">No spending data for this trip</p>
+                            </div>
+                            <div v-else class="chart-container"><canvas id="dailyChart"></canvas></div>
+                        </div>
+                    </div>
+
+                    <!-- Category Summary Cards -->
+                    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-8">
+                        <div v-for="cat in categoryBreakdown" :key="cat.name"
+                             @click="filterCategory = filterCategory === cat.name ? '' : cat.name"
+                             :class="filterCategory === cat.name ? 'ring-2 ring-blue-400 border-blue-300' : 'border-gray-100'"
+                             class="bg-white p-4 rounded-xl shadow-sm border cursor-pointer hover:shadow-md transition-all">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase tracking-widest truncate">{{ cat.name }}</p>
+                            <p class="text-lg font-black text-gray-900 mt-1">${{ formatAmount(cat.total) }}</p>
+                            <div class="flex items-center justify-between mt-1">
+                                <span class="text-[10px] text-gray-400">{{ cat.count }} txns</span>
+                                <span class="text-[10px] font-bold" :style="{color: cat.color}">{{ cat.pct }}%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Filter Banner -->
+                    <div v-if="filterCategory" class="mb-3 flex items-center gap-2 text-xs">
+                        <span class="text-gray-400 font-semibold">Filtered by:</span>
+                        <span class="bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full font-bold flex items-center gap-1">
+                            {{ filterCategory }}
+                            <button @click="filterCategory = ''" class="hover:text-blue-900 text-[10px]">&#10005;</button>
+                        </span>
+                    </div>
+
+                    <!-- Transaction Table -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+                        <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                            <h3 class="font-bold text-gray-700 text-sm">Transactions</h3>
+                            <span class="text-[10px] font-bold text-gray-400 uppercase tracking-widest">{{ filteredTransactions.length }} items</span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-left border-collapse">
+                                <thead>
+                                    <tr class="bg-gray-50 text-gray-400 text-[10px] uppercase tracking-widest font-bold border-b border-gray-100">
+                                        <th class="px-2 py-3 w-px text-center">REV</th>
+                                        <th @click="sortBy('date')" class="px-4 py-3 w-32 cursor-pointer hover:text-gray-600 select-none">
+                                            Date <span v-if="sortKey === 'date'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('category')" class="px-4 py-3 w-40 cursor-pointer hover:text-gray-600 select-none">
+                                            Category <span v-if="sortKey === 'category'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('description')" class="px-4 py-3 cursor-pointer hover:text-gray-600 select-none">
+                                            Description <span v-if="sortKey === 'description'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('source')" class="px-4 py-3 w-24 cursor-pointer hover:text-gray-600 select-none">
+                                            Source <span v-if="sortKey === 'source'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('amount')" class="px-4 py-3 w-28 text-right cursor-pointer hover:text-gray-600 select-none">
+                                            Amount <span v-if="sortKey === 'amount'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-50">
+                                    <tr v-for="tx in filteredTransactions" :key="tx.id"
+                                        @click="openTxModal(tx)"
+                                        :class="tx.needs_review ? 'bg-orange-50/40' : 'hover:bg-gray-50/80'"
+                                        class="transition-colors group cursor-pointer">
+                                        <td class="px-2 py-3 text-center" @click.stop>
+                                            <button @click="toggleReview(tx)"
+                                                    :aria-label="tx.needs_review ? 'Mark transaction reviewed' : 'Flag transaction for review'"
+                                                    :class="tx.needs_review ? 'text-orange-500' : 'text-gray-200 group-hover:text-gray-300'"
+                                                    class="text-base transition-colors" v-html="tx.needs_review ? '&#9888;' : '&#9651;'">
+                                            </button>
+                                        </td>
+                                        <td class="px-4 py-3 text-sm text-gray-500 font-medium tabular-nums whitespace-nowrap">{{ tx.date }}</td>
+                                        <td class="px-4 py-3" @click.stop>
+                                            <select :value="tx.category"
+                                                    :aria-label="'Category for ' + tx.description"
+                                                    @change="updateCategory(tx, $event)"
+                                                    class="bg-blue-50 text-blue-700 text-[11px] border-none rounded-full px-2.5 py-0.5 font-bold cursor-pointer hover:opacity-80 focus:ring-2 focus:ring-blue-400 appearance-none">
+                                                <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                                            </select>
+                                        </td>
+                                        <td class="px-4 py-3 text-sm text-gray-900 font-medium truncate max-w-md" :title="tx.description">
+                                            {{ tx.description }}
+                                        </td>
+                                        <td class="px-4 py-3">
+                                            <span class="text-gray-400 font-mono text-[11px]">{{ tx.source }}</span>
+                                        </td>
+                                        <td class="px-4 py-3 text-sm text-right font-bold text-gray-900 tabular-nums">
+                                            ${{ formatAmount(tx.amount) }}
+                                        </td>
+                                    </tr>
+                                    <tr v-if="filteredTransactions.length === 0">
+                                        <td colspan="6" class="px-4 py-12 text-center text-gray-400">No transactions match.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+        <!-- Transaction detail modal (same pattern as /spending) -->
+        <div v-if="selectedTx" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="selectedTx = null">
+            <div class="fixed inset-0 bg-black/30"></div>
+            <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto" @click.stop>
+                <button @click="selectedTx = null" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+                <h2 class="text-lg font-bold text-gray-900 mb-4">Transaction Details</h2>
+                <div class="grid grid-cols-2 gap-4 mb-4">
+                    <div>
+                        <p class="text-[10px] font-bold text-gray-400 uppercase">Date</p>
+                        <p class="text-sm font-semibold text-gray-900">{{ selectedTx.date }}</p>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-bold text-gray-400 uppercase">Amount</p>
+                        <p class="text-lg font-black text-gray-900">${{ formatAmount(selectedTx.amount) }}</p>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-bold text-gray-400 uppercase">Source</p>
+                        <p class="text-sm font-semibold text-gray-700">{{ selectedTx.source }}</p>
+                    </div>
+                    <div>
+                        <p class="text-[10px] font-bold text-gray-400 uppercase">Category</p>
+                        <p class="text-sm font-semibold text-gray-700">{{ selectedTx.category }}</p>
+                    </div>
+                </div>
+                <div class="mb-4">
+                    <p class="text-[10px] font-bold text-gray-400 uppercase mb-1">Description</p>
+                    <p class="text-sm text-gray-900 bg-gray-50 p-3 rounded-lg">{{ selectedTx.description }}</p>
+                </div>
+                <div class="pt-2 border-t border-gray-100 mb-4">
+                    <button @click="toggleReview(selectedTx)"
+                            :class="selectedTx.needs_review ? 'bg-orange-100 text-orange-700 hover:bg-orange-200' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+                            class="w-full py-2 rounded-lg text-sm font-bold transition-colors">
+                        <span v-html="selectedTx.needs_review ? '&#9888;' : '&#10003;'"></span>
+                        {{ selectedTx.needs_review ? 'Needs Review — Click to Clear' : 'Reviewed — Click to Flag' }}
+                    </button>
+                </div>
+                <div v-if="selectedTx.source_file_path && selectedTx.source !== 'Amazon'" class="pt-2 border-t border-gray-100">
+                    <button @click="selectedTx._showPdf = !selectedTx._showPdf"
+                            class="flex items-center gap-2 text-[10px] font-bold text-gray-400 uppercase hover:text-gray-600 transition-colors mb-2">
+                        <span v-html="selectedTx._showPdf ? '&#9660;' : '&#9654;'"></span>
+                        Source Statement
+                    </button>
+                    <iframe v-if="selectedTx._showPdf" :src="'/api/workspace/file?path=' + encodeURIComponent(selectedTx.source_file_path)" class="w-full h-[60vh] rounded-lg border border-gray-200"></iframe>
+                </div>
+            </div>
+        </div>
+
+{% endraw %}
+{% endblock %}
+
+{% block vue_app %}
+        createApp({
+            setup() {
+                const tripId = {{ trip_id }};
+                const loading = ref(true);
+                const trip = ref(null);
+                const transactions = ref([]);
+                const categories = ref([]);
+                const filterCategory = ref('');
+                const sortKey = ref('date');
+                const sortDir = ref('asc');
+
+                const duration = computed(() => {
+                    if (!trip.value) return 0;
+                    const s = new Date(trip.value.start_date);
+                    const e = new Date(trip.value.end_date);
+                    return Math.round((e - s) / (1000 * 60 * 60 * 24)) + 1;
+                });
+
+                const totalSpend = computed(() => transactions.value.reduce((s, t) => s + t.amount, 0));
+                const perDay = computed(() => duration.value > 0 ? totalSpend.value / duration.value : 0);
+
+                const categoryBreakdown = computed(() => {
+                    const map = {};
+                    transactions.value.forEach(tx => {
+                        if (!map[tx.category]) map[tx.category] = { total: 0, count: 0 };
+                        map[tx.category].total += tx.amount;
+                        map[tx.category].count++;
+                    });
+                    const total = totalSpend.value || 1;
+                    return Object.entries(map)
+                        .sort((a, b) => b[1].total - a[1].total)
+                        .map(([name, data], i) => ({
+                            name,
+                            total: data.total,
+                            count: data.count,
+                            pct: ((data.total / total) * 100).toFixed(1),
+                            color: CHART_COLORS[i % CHART_COLORS.length],
+                        }));
+                });
+
+                const topCategory = computed(() => categoryBreakdown.value.length ? categoryBreakdown.value[0].name : 'N/A');
+
+                const filteredTransactions = computed(() => {
+                    let data = [...transactions.value];
+                    if (filterCategory.value) data = data.filter(t => t.category === filterCategory.value);
+                    return data.sort((a, b) => {
+                        let valA = a[sortKey.value], valB = b[sortKey.value];
+                        if (valA == null) valA = '';
+                        if (valB == null) valB = '';
+                        if (sortKey.value === 'amount') { valA = parseFloat(valA); valB = parseFloat(valB); }
+                        else { valA = valA.toString().toLowerCase(); valB = valB.toString().toLowerCase(); }
+                        if (valA < valB) return sortDir.value === 'asc' ? -1 : 1;
+                        if (valA > valB) return sortDir.value === 'asc' ? 1 : -1;
+                        return 0;
+                    });
+                });
+
+                const formatAmount = (val) => {
+                    if (val == null) return '0.00';
+                    return val.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                };
+
+                const sortBy = (key) => {
+                    if (sortKey.value === key) { sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'; }
+                    else { sortKey.value = key; sortDir.value = key === 'amount' ? 'desc' : 'asc'; }
+                };
+
+                const toggleReview = async (tx) => {
+                    const needsReview = !Boolean(tx.needs_review);
+                    await apiFetch(`/api/transactions/${tx.id}/review`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ needs_review: needsReview })
+                    });
+                    const orig = transactions.value.find(t => t.id === tx.id);
+                    if (orig) orig.needs_review = needsReview;
+                    tx.needs_review = needsReview;
+                    if (selectedTx.value && selectedTx.value.id === tx.id) selectedTx.value.needs_review = needsReview;
+                };
+
+                const updateCategory = async (tx, event) => {
+                    const previous = tx.category;
+                    const newCat = event.target.value;
+                    try {
+                        await apiFetch(`/api/transactions/${tx.id}/category`, {
+                            method: 'POST', headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ category: newCat })
+                        });
+                        const orig = transactions.value.find(t => t.id === tx.id);
+                        if (orig) {
+                            orig.category = newCat;
+                            orig.needs_review = false;
+                        }
+                        tx.category = newCat;
+                        tx.needs_review = false;
+                        if (selectedTx.value && selectedTx.value.id === tx.id) {
+                            selectedTx.value.category = newCat;
+                            selectedTx.value.needs_review = false;
+                        }
+                    } catch (_) {
+                        event.target.value = previous;
+                    }
+                };
+
+                // Charts
+                let catChart = null, dailyChart = null;
+
+                const updateCategoryChart = () => {
+                    try {
+                        const SANKEY_SOURCE = 'Total Spend';
+                        const flows = {};
+                        transactions.value.forEach(tx => {
+                            const from = SANKEY_SOURCE;
+                            const to = tx.category;
+                            const key = `${from}::${to}`;
+                            flows[key] = (flows[key] || 0) + tx.amount;
+                        });
+
+                        if (catChart) { catChart.destroy(); catChart = null; }
+                        const ctxCat = document.getElementById('categoryChart');
+                        if (ctxCat && transactions.value.length > 0) {
+                            const sankeyData = [];
+                            for (const [key, value] of Object.entries(flows)) {
+                                const [from, to] = key.split('::');
+                                if (value > 0) sankeyData.push({ from, to, flow: value });
+                            }
+
+                            if (sankeyData.length > 0) {
+                                // Node color mapping
+                                const allNodes = [...new Set([...sankeyData.map(d => d.from), ...sankeyData.map(d => d.to)])];
+                                const colorMap = {};
+                                allNodes.forEach((node, i) => {
+                                    colorMap[node] = CHART_COLORS[i % CHART_COLORS.length];
+                                });
+
+                                // Sankey preferred over doughnut for visual hierarchy of spend flows
+                                catChart = new Chart(ctxCat, {
+                                    type: 'sankey',
+                                    data: {
+                                        datasets: [{
+                                            data: sankeyData,
+                                            colorFrom: (c) => colorMap[c.dataset.data[c.dataIndex]?.from] || '#eee',
+                                            colorTo: (c) => colorMap[c.dataset.data[c.dataIndex]?.to] || '#eee',
+                                            colorMode: 'gradient',
+                                            nodeWidth: 12
+                                        }]
+                                    },
+                                    options: {
+                                        responsive: true,
+                                        maintainAspectRatio: false,
+                                        plugins: {
+                                            legend: { display: false },
+                                            tooltip: {
+                                                callbacks: {
+                                                    label: (ctx) => {
+                                                        const d = ctx.dataset.data[ctx.dataIndex];
+                                                        if (!d) return '';
+                                                        return `${d.from} → ${d.to}: $${d.flow.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 0})}`;
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        layout: { padding: { top: 10, bottom: 10, left: 70, right: 90 } }
+                                    }
+                                });
+                                requestAnimationFrame(() => { if (catChart) catChart.resize(); });
+                            }
+                        }
+                    } catch (err) {
+                        console.warn("Chart update skipped:", err);
+                    }
+                };
+
+                const updateDailyChart = () => {
+                    const txns = filteredTransactions.value;
+                    const dayData = {};
+                    txns.forEach(tx => {
+                        dayData[tx.date] = dayData[tx.date] || {};
+                        dayData[tx.date][tx.category] = (dayData[tx.date][tx.category] || 0) + tx.amount;
+                    });
+                    const catSet = {};
+                    txns.forEach(tx => { catSet[tx.category] = (catSet[tx.category] || 0) + tx.amount; });
+                    const sortedCats = Object.entries(catSet).sort((a, b) => b[1] - a[1]);
+
+                    if (dailyChart) dailyChart.destroy();
+                    const ctxDaily = document.getElementById('dailyChart');
+                    if (ctxDaily && trip.value) {
+                        const allDates = [];
+                        const s = new Date(trip.value.start_date);
+                        const e = new Date(trip.value.end_date);
+                        for (let d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) {
+                            allDates.push(d.toISOString().slice(0, 10));
+                        }
+                        Object.keys(dayData).forEach(d => { if (!allDates.includes(d)) allDates.push(d); });
+                        allDates.sort();
+
+                        const catNames = sortedCats.map(x => x[0]);
+                        const datasets = catNames.map((cat, i) => ({
+                            label: cat,
+                            data: allDates.map(d => dayData[d]?.[cat] || 0),
+                            backgroundColor: CHART_COLORS[i % CHART_COLORS.length],
+                            borderRadius: 2,
+                        }));
+
+                        const shortLabels = allDates.map(d => {
+                            const dt = new Date(d + 'T12:00:00');
+                            return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+                        });
+
+                        dailyChart = new Chart(ctxDaily, {
+                            type: 'bar',
+                            data: { labels: shortLabels, datasets },
+                            options: {
+                                responsive: true, maintainAspectRatio: false,
+                                plugins: {
+                                    legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 9 }, padding: 8 } },
+                                    tooltip: {
+                                        mode: 'index',
+                                        callbacks: {
+                                            title: (items) => allDates[items[0].dataIndex],
+                                            label: (ctx) => ctx.raw > 0 ? `${ctx.dataset.label}: $${ctx.raw.toFixed(0)}` : null,
+                                            footer: (items) => `Total: $${items.reduce((s, i) => s + i.raw, 0).toFixed(0)}`
+                                        }
+                                    }
+                                },
+                                scales: {
+                                    x: { stacked: true, grid: { display: false }, ticks: { maxRotation: 45, font: { size: 9 } } },
+                                    y: { stacked: true, beginAtZero: true, ticks: { callback: v => '$' + v.toLocaleString() } }
+                                }
+                            }
+                        });
+                        requestAnimationFrame(() => { if (dailyChart) dailyChart.resize(); });
+                    }
+                };
+
+                const updateCharts = () => { updateCategoryChart(); updateDailyChart(); };
+
+                const fetchData = async () => {
+                    try {
+                        const res = await apiFetch(`/api/spending/trip/${tripId}`);
+                        const data = await res.json();
+                        trip.value = data.trip;
+                        transactions.value = data.transactions;
+                        categories.value = data.categories || [];
+                        loading.value = false;
+                    } catch (e) { console.error("Fetch failed", e); }
+                };
+
+                watch(transactions, () => { nextTick(updateCharts); }, { deep: true });
+                watch(filterCategory, () => { nextTick(updateDailyChart); });
+
+                onMounted(fetchData);
+
+                const selectedTx = ref(null);
+                const openTxModal = async (tx) => {
+                    selectedTx.value = { ...tx, _loadingDoc: true, _showPdf: false };
+                    try {
+                        const resp = await apiFetch(`/api/transactions/${tx.id}/detail`);
+                        const data = await resp.json();
+                        if (data.transaction) {
+                            selectedTx.value = {
+                                ...selectedTx.value,
+                                source_file_path: data.transaction.source_file_path,
+                                _loadingDoc: false,
+                            };
+                        } else {
+                            selectedTx.value._loadingDoc = false;
+                        }
+                    } catch { selectedTx.value._loadingDoc = false; }
+                };
+
+                return {
+                    loading, trip, transactions, categories,
+                    filterCategory, sortKey, sortDir,
+                    duration, totalSpend, perDay, topCategory,
+                    categoryBreakdown, filteredTransactions,
+                    formatAmount, sortBy, toggleReview, updateCategory,
+                    selectedTx, openTxModal,
+                };
+            }
+        }).mount('#app');
+{% endblock %}

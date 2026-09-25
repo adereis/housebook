@@ -1,0 +1,41 @@
+# Local secrets
+.env
+
+# Workspace data
+# The workspace belongs outside the repo, but nothing stops
+# HOUSEBOOK_WORKSPACE_DIR from being set to it, so every
+# workspace subtree is ignored here as well. Otherwise statement
+# sidecars, tax extracts, HSA receipts and Amazon CSVs become
+# committable. The per-source dirs are anchored ("/cc/") so the
+# source packages under src/housebook/{cc,hsa,tax,amazon}/
+# are unaffected.
+finance.db
+master_transactions.csv
+*.pdf
+data/
+input/
+/amazon/
+/cc/
+/hsa/
+/tax/
+
+# Private configuration (only the *.example.json templates are tracked)
+# "/config/**" rather than "/config/" so the templates can be
+# re-included. It also covers nested live config such as
+# config/cc/issuers.json and config/pii-denylist.txt.
+/config/**
+!/config/*.example.json
+
+# AI Agent local state
+.claude/
+.antigravitycli/
+
+# Python / Environment
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.direnv/
+
+# UI build dependencies (generated assets are committed under static/)
+node_modules/

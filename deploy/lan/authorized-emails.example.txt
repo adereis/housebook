@@ -1,0 +1,2 @@
+sterling.ledger@example.test
+penny.ledger@example.test

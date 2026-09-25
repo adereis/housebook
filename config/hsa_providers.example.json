@@ -1,0 +1,14 @@
+{
+    "providers": [
+        {
+            "canonical_name": "Example Hospital",
+            "category": "medical",
+            "aliases": ["EXAMPLE HOSP", "EX HOSPITAL"]
+        },
+        {
+            "canonical_name": "Example Pharmacy",
+            "category": "pharmacy",
+            "aliases": ["EX PHARMACY", "EXAMPLE RX"]
+        }
+    ]
+}

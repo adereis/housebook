@@ -1,0 +1,5 @@
+{
+    "amazon_keywords": ["AMZN", "AMAZON"],
+    "amazon_exclusion_patterns": ["XYZ01"],
+    "date_window_days": 3
+}

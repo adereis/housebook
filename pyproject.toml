@@ -1,0 +1,70 @@
+[build-system]
+requires = ["setuptools>=77.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "housebook"
+version = "0.1.0"
+description = "A household ledger run by your AI coding agent: statements, receipts and tax forms in, an audited SQLite ledger out"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    { name = "Ademar Reis", email = "ademar.reis@gmail.com" }
+]
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = [
+    "fastapi",
+    "uvicorn",
+    "pydantic",
+    "python-dotenv",
+    "openpyxl",
+    "jinja2",
+    "python-dateutil"
+]
+
+[project.optional-dependencies]
+# Lint and test tooling; ./bootstrap.sh installs it with ".[dev]".
+dev = [
+    "ruff",
+    "httpx",  # fastapi.testclient
+    "tomli; python_version < '3.11'",
+]
+
+[project.urls]
+Repository = "https://github.com/adereis/housebook"
+
+[project.scripts]
+housebook-app = "housebook.app:main"
+housebook-init-db = "housebook.init_db:main"
+housebook-demo-seed = "housebook.demo_seed:main"
+
+housebook-audit = "housebook.audit:main"
+housebook-reconcile = "housebook.core.reconciler:main"
+housebook-category-report = "housebook.category_report:main"
+housebook-optimize-rules = "housebook.optimize_rules:main"
+housebook-sync = "housebook.sync:main"
+housebook-tax = "housebook.tax.cli:main"
+housebook-hsa = "housebook.hsa.cli:main"
+housebook-cc = "housebook.cc.cli:main"
+housebook-amazon = "housebook.amazon.cli:main"
+housebook-ingest = "housebook.ingest:main"
+housebook-build-assets = "housebook.assets:main"
+housebook-leak-scan = "housebook.leak_scan:main"
+
+[tool.setuptools.package-data]
+housebook = [
+    "migrations/*.sql",
+    "templates/*.html",
+    "static/css/*.css",
+    "static/vendor/*.js",
+    "static/vendor/*.txt",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = []

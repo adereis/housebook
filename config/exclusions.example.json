@@ -1,0 +1,21 @@
+{
+    "transaction_keywords": [
+        "internal transfer"
+    ],
+    "pdf_line_metadata": [
+        "New Balance",
+        "Previous Balance",
+        "Credit Limit",
+        "Total New Balance",
+        "Statement Balance",
+        "Amount Due",
+        "Total Charges",
+        "Open Date",
+        "Closing Date",
+        "Account Ending in",
+        "Statement",
+        "Page",
+        "Payment Due Date",
+        "Account:"
+    ]
+}

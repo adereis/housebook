@@ -1,0 +1,42 @@
+# OAuth2 Proxy 7.15.x example for Caddy's forward_auth integration.
+# Client and cookie secrets are supplied through OAUTH2_PROXY_* environment
+# variables, never this file.
+
+provider = "google"
+provider_display_name = "Google"
+http_address = "127.0.0.1:4180"
+reverse_proxy = true
+trusted_proxy_ips = ["127.0.0.1/32", "::1/128"]
+
+# Replace this reserved example hostname in the live copy. It must exactly
+# match the Google OAuth client's authorized redirect URI.
+redirect_url = "https://housebook.example.test/oauth2/callback"
+scope = "openid email profile"
+code_challenge_method = "S256"
+prompt = "select_account"
+
+# This file is the authorization policy. Do not add email_domains = ["*"]:
+# that would authorize accounts beyond this explicit list.
+authenticated_emails_file = "/etc/housebook/authorized-emails.txt"
+
+# Caddy performs the application proxy after checking /oauth2/auth.
+upstreams = ["static://202"]
+set_xauthrequest = true
+pass_access_token = false
+pass_authorization_header = false
+pass_basic_auth = false
+pass_user_headers = false
+
+cookie_name = "__Host-housebook"
+cookie_path = "/"
+cookie_secure = true
+cookie_httponly = true
+cookie_samesite = "lax"
+cookie_expire = "8h"
+
+# Retain startup and authentication failures without logging every financial
+# URL. Caddy access logging is likewise intentionally not enabled.
+standard_logging = true
+auth_logging = true
+request_logging = false
+show_debug_on_error = false

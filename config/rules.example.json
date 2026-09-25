@@ -1,0 +1,174 @@
+{
+    "Groceries": [
+        "WHOLE FOODS",
+        "TRADER JOE",
+        "KROGER",
+        "SAFEWAY",
+        "PUBLIX",
+        "COSTCO",
+        "WALMART",
+        "WAL-MART",
+        "ALDI",
+        "GROCERY",
+        "SUPERMARKET"
+    ],
+    "Dining & Takeout": [
+        "STARBUCKS",
+        "MCDONALD",
+        "CHIPOTLE",
+        "PANERA",
+        "SUBWAY",
+        "DOORDASH",
+        "GRUBHUB",
+        "TST*",
+        "RESTAURAN",
+        "DINER",
+        "PIZZERIA",
+        "GRILL",
+        "CAFE",
+        "BAKERY",
+        "COFFEE"
+    ],
+    "Shopping & Retail": [
+        "AMAZON",
+        "TARGET",
+        "BEST BUY",
+        "APPLE.COM",
+        "ETSY",
+        "EBAY",
+        "IKEA",
+        "NIKE",
+        "OUTLET",
+        "USPS",
+        "FEDEX",
+        "UPS",
+        "STAPLES"
+    ],
+    "Flights": [
+        "DELTA AIR",
+        "UNITED AIRLINES",
+        "AMERICAN AIR",
+        "SOUTHWEST",
+        "JETBLUE",
+        "ALASKA AIR",
+        "SPIRIT AIR",
+        "FRONTIER AIR",
+        "AIRWAYS",
+        "AIRLINES",
+        "AMTRAK"
+    ],
+    "Lodging": [
+        "HOTEL",
+        "MOTEL",
+        "MARRIOTT",
+        "HILTON",
+        "HYATT",
+        "HOLIDAY INN",
+        "HAMPTON INN",
+        "BEST WESTERN",
+        "AIRBNB",
+        "VRBO",
+        "BOOKING.COM",
+        "EXPEDIA"
+    ],
+    "Local Transit": [
+        "UBER",
+        "LYFT",
+        "TAXI",
+        "PARKING",
+        "HERTZ",
+        "AVIS",
+        "ENTERPRISE",
+        "RENT-A-CAR",
+        "E-ZPASS",
+        "EZPASS",
+        "TOLL",
+        "METRO"
+    ],
+    "Entertainment": [
+        "NETFLIX",
+        "SPOTIFY",
+        "TICKETMASTER",
+        "CINEMA",
+        "THEATER",
+        "THEATRE",
+        "MUSEUM"
+    ],
+    "Bills & Utilities": [
+        "COMCAST",
+        "XFINITY",
+        "VERIZON",
+        "AT&T",
+        "T-MOBILE",
+        "LOCAL POWER CO",
+        "UTILITY",
+        "INSURANCE"
+    ],
+    "Auto & Fuel": [
+        "GAS STATION",
+        "SHELL",
+        "EXXON",
+        "MOBIL",
+        "CHEVRON",
+        "BP",
+        "SUNOCO",
+        "SPEEDWAY",
+        "7-ELEVEN",
+        "CAR WASH",
+        "AUTOZONE",
+        "JIFFY LUBE"
+    ],
+    "Health": [
+        "CVS",
+        "WALGREENS",
+        "PHARMACY",
+        "HOSPITAL",
+        "MEDICAL",
+        "DENTAL",
+        "CLINIC"
+    ],
+    "Wellness": [
+        "FITNESS",
+        "YOGA"
+    ],
+    "Home & Garden": [
+        "HOME DEPOT",
+        "LOWES",
+        "ACE HARDWARE",
+        "TRUE VALUE",
+        "GARDEN CENTER"
+    ],
+    "Pets": [
+        "PETCO",
+        "PETSMART",
+        "CHEWY",
+        "VETERINARY"
+    ],
+    "Education": [
+        "TUITION",
+        "COURSERA",
+        "UDEMY"
+    ],
+    "Work (Reimbursable)": [
+        "MANUAL_WORK (REIMBURSABLE)"
+    ],
+    "Transfers & Refunds": [
+        "AUTOPAY",
+        "PAYMENT RECEIVED",
+        "PYMT",
+        "TRANSFER",
+        "CASH REWARD",
+        "CREDIT"
+    ],
+    "Alcohol & Specialty": [
+        "TOTAL WINE",
+        "LIQUOR",
+        "WINE"
+    ],
+    "Excluded": [
+        "MANUAL_EXCLUDED"
+    ],
+    "Miscellaneous": [
+        "MANUAL_MISCELLANEOUS"
+    ]
+}

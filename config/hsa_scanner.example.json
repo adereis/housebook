@@ -1,0 +1,14 @@
+{
+    "medical_keywords": [
+        "riverside health"
+    ],
+    "exclusion_patterns": [
+        "fitness",
+        "gym",
+        "f45",
+        "abc*",
+        "hair",
+        "salon",
+        "barber"
+    ]
+}

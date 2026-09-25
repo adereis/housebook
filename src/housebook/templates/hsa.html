@@ -1,0 +1,673 @@
+{% extends "base.html" %}
+
+{% block title %}HSA Shoebox — Housebook{% endblock %}
+
+{% block header_rows %}
+{% raw %}
+                <!-- Date presets + date inputs -->
+                <div class="py-2 flex items-center gap-2 min-w-0 overflow-x-auto no-scrollbar">
+                    <div class="flex items-center gap-1 shrink-0">
+                        <button v-for="preset in datePresets" :key="preset.label"
+                                @click="applyPreset(preset)"
+                                :class="activePreset === preset.label ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:border-blue-400 hover:text-blue-600'"
+                                class="px-2.5 py-1 rounded-lg text-xs font-bold border transition-all">
+                            {{ preset.label }}
+                        </button>
+                    </div>
+                    <div class="flex items-center bg-gray-50 rounded-lg px-2 py-1 text-xs border border-gray-200 shrink-0">
+                        <span class="text-gray-400 mr-1.5">From</span>
+                        <input aria-label="Start date" type="text" v-model="filters.startDate" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="bg-transparent focus:outline-none font-semibold text-gray-700 w-[88px] tabular-nums">
+                        <span class="text-gray-400 mx-1.5">To</span>
+                        <input aria-label="End date" type="text" v-model="filters.endDate" placeholder="YYYY-MM-DD" pattern="\d{4}-\d{2}-\d{2}" maxlength="10" class="bg-transparent focus:outline-none font-semibold text-gray-700 w-[88px] tabular-nums">
+                    </div>
+                </div>
+                <!-- Other filters -->
+                <div class="pb-2 flex items-center gap-2 min-w-0 overflow-x-auto no-scrollbar">
+                    <select aria-label="Filter by reimbursement status" v-model="filters.status"
+                            class="px-2.5 py-1 rounded-lg text-xs font-bold border border-gray-300 bg-white text-gray-600 focus:outline-none focus:border-blue-400">
+                        <option value="">All Status</option>
+                        <option value="UNREIMBURSED">Unreimbursed</option>
+                        <option value="PENDING">Pending</option>
+                        <option value="REIMBURSED">Reimbursed</option>
+                    </select>
+                    <select aria-label="Filter by patient" v-model="filters.patient"
+                            class="px-2.5 py-1 rounded-lg text-xs font-bold border border-gray-300 bg-white text-gray-600 focus:outline-none focus:border-blue-400">
+                        <option value="">All Patients</option>
+                        <option v-for="p in patients" :key="p" :value="p">{{ p }}</option>
+                    </select>
+                    <div class="ml-auto flex items-center gap-3 shrink-0">
+                        <label class="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
+                            <input type="checkbox" v-model="filters.needsReview" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5">
+                            <span class="font-bold">Needs review only</span>
+                        </label>
+                        <label class="flex items-center gap-1 text-xs text-gray-500 cursor-pointer">
+                            <input type="checkbox" v-model="filters.showExcluded" class="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5">
+                            <span class="font-bold">Show excluded</span>
+                        </label>
+                    </div>
+                </div>
+{% endraw %}
+{% endblock %}
+
+{% block content %}
+{% raw %}
+                <!-- ==================== HSA SHOEBOX VIEW ==================== -->
+                <div>
+                    <!-- KPI Cards -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">Audit-Ready (IRS-Proof)</div>
+                            <div class="text-xl font-black text-green-600">${{ formatAmount(auditReadyTotal) }}</div>
+                        </div>
+                        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">Total Unreimbursed</div>
+                            <div class="text-xl font-black text-gray-900">${{ formatAmount(unreimbursedTotal) }}</div>
+                        </div>
+                        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">Needs Review</div>
+                            <div class="text-xl font-black" :class="needsReviewCount > 0 ? 'text-amber-600' : 'text-gray-400'">{{ needsReviewCount }}</div>
+                        </div>
+                        <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-200 text-center">
+                            <div class="text-[10px] font-bold text-gray-400 uppercase mb-1">Total Expenses</div>
+                            <div class="text-xl font-black text-gray-900">{{ totalCount }}</div>
+                        </div>
+                    </div>
+
+                    <!-- Breakdown by category -->
+                    <div v-if="categoryBreakdown.length" class="bg-white rounded-xl shadow-sm border border-gray-200 p-4 mb-6">
+                        <h3 class="text-xs font-black text-gray-500 uppercase tracking-wide mb-3">By Category</h3>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div v-for="cat in categoryBreakdown" :key="cat.category"
+                                 class="flex items-center justify-between bg-gray-50 rounded-lg px-3 py-2">
+                                <div>
+                                    <div class="text-xs font-bold text-gray-700 capitalize">{{ cat.category }}</div>
+                                    <div class="text-[10px] text-gray-400">{{ cat.count }} item(s)</div>
+                                </div>
+                                <div class="text-sm font-black text-gray-900">${{ formatAmount(cat.total) }}</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Expenses Table -->
+                    <div class="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+                        <div class="px-4 py-3 border-b border-gray-100 flex items-center justify-between">
+                            <h3 class="text-xs font-black text-gray-500 uppercase tracking-wide">
+                                Expenses ({{ filteredExpenses.length }})
+                            </h3>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm">
+                                <thead>
+                                    <tr class="bg-gray-50 text-left">
+                                        <th @click="sortBy('service_date')" class="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase cursor-pointer hover:text-gray-600 select-none">
+                                            Date <span v-if="sortKey === 'service_date'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('provider')" class="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase cursor-pointer hover:text-gray-600 select-none">
+                                            Provider <span v-if="sortKey === 'provider'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('patient')" class="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase cursor-pointer hover:text-gray-600 select-none">
+                                            Patient <span v-if="sortKey === 'patient'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('category')" class="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase cursor-pointer hover:text-gray-600 select-none">
+                                            Category <span v-if="sortKey === 'category'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('patient_responsibility')" class="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase text-right cursor-pointer hover:text-gray-600 select-none">
+                                            Amount <span v-if="sortKey === 'patient_responsibility'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('source')" class="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase cursor-pointer hover:text-gray-600 select-none">
+                                            Source <span v-if="sortKey === 'source'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('evidence_level')" class="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase cursor-pointer hover:text-gray-600 select-none">
+                                            Evidence <span v-if="sortKey === 'evidence_level'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                        <th @click="sortBy('doc_count')" class="px-4 py-2 text-[10px] font-bold text-gray-400 uppercase text-center cursor-pointer hover:text-gray-600 select-none">
+                                            Docs <span v-if="sortKey === 'doc_count'" v-html="sortDir === 'asc' ? '&#9650;' : '&#9660;'"></span>
+                                        </th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-gray-100">
+                                    <tr v-for="exp in sortedExpenses" :key="exp.id"
+                                        @click="openDetail(exp.id)"
+                                        :class="{'bg-amber-50': exp.needs_review && !exp.exclusion_reason, 'bg-blue-50': exp.source === 'cc_stub' && !exp.exclusion_reason, 'opacity-50': exp.exclusion_reason}"
+                                        class="hover:bg-gray-50 transition-colors cursor-pointer">
+                                        <td class="px-4 py-2 text-xs tabular-nums text-gray-600">{{ exp.service_date || '—' }}</td>
+                                        <td class="px-4 py-2 text-xs font-semibold text-gray-800 max-w-[200px] truncate">{{ exp.provider }}</td>
+                                        <td class="px-4 py-2 text-xs text-gray-600 capitalize">{{ exp.patient }}</td>
+                                        <td class="px-4 py-2">
+                                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                                                  :class="categoryColor(exp.category)">
+                                                {{ exp.category }}
+                                            </span>
+                                        </td>
+                                        <td class="px-4 py-2 text-xs font-bold text-gray-900 text-right tabular-nums">${{ formatAmount(exp.patient_responsibility) }}</td>
+                                        <td class="px-4 py-2">
+                                            <span class="px-2 py-0.5 rounded text-[10px] font-bold"
+                                                  :class="sourceColor(exp.source)">
+                                                {{ exp.source }}
+                                            </span>
+                                        </td>
+                                        <td class="px-4 py-2">
+                                            <span v-if="exp.exclusion_reason" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-600">
+                                                Excluded
+                                            </span>
+                                            <span v-else class="px-2 py-0.5 rounded-full text-[10px] font-bold"
+                                                  :class="evidenceColor(exp.evidence_level)">
+                                                {{ evidenceBadge(exp.evidence_level) }} {{ evidenceLabel(exp.evidence_level) }}
+                                            </span>
+                                        </td>
+                                        <td class="px-4 py-2 text-xs text-center tabular-nums" :class="exp.doc_count ? 'text-green-600 font-bold' : 'text-gray-400'">
+                                            {{ exp.doc_count }}
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div v-if="!filteredExpenses.length" class="px-4 py-12 text-center text-sm text-gray-400">
+                            No HSA expenses found. Run <code class="bg-gray-100 px-1 rounded">housebook-hsa scan</code> to detect medical transactions from credit cards,
+                            or <code class="bg-gray-100 px-1 rounded">housebook-hsa ingest</code> to import receipts.
+                        </div>
+                    </div>
+                </div>
+{% endraw %}
+{% endblock %}
+
+{% block overlays %}
+{% raw %}
+        <!-- ==================== EXPENSE DETAIL MODAL ==================== -->
+        <Transition name="modal-fade">
+            <div v-if="detail" class="fixed inset-0 z-50 flex items-center justify-center p-4" @keydown.escape="detail = null" tabindex="-1" ref="modalOverlay">
+                <div class="fixed inset-0 bg-black/30" @click="detail = null"></div>
+                <div class="relative bg-white rounded-2xl shadow-2xl max-w-6xl w-full p-6 max-h-[90vh] overflow-y-auto" @click.stop>
+                    <button @click="detail = null" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
+                    <h2 class="text-lg font-bold text-gray-900 mb-1" v-if="!detailLoading && detail.expense">
+                        {{ detail.expense.provider }}
+                        <span class="text-sm font-normal text-gray-400 ml-2">{{ detail.expense.service_date }}</span>
+                    </h2>
+                    <h2 class="text-lg font-bold text-gray-900 mb-1" v-else>Expense Details</h2>
+                    <p v-if="!detailLoading && detail.expense" class="text-[10px] text-gray-400 mb-4 tabular-nums">ID #{{ detail.expense.id }}</p>
+                    <div v-else class="mb-4"></div>
+
+                    <!-- Loading -->
+                    <div v-if="detailLoading" class="flex justify-center py-8">
+                        <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                    </div>
+
+                    <template v-else>
+                        <!-- Expense info -->
+                        <div class="grid grid-cols-2 gap-4 mb-5">
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Date</p>
+                                <p class="text-sm font-semibold text-gray-900">{{ detail.expense.service_date || '—' }}</p>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Amount Owed</p>
+                                <p class="text-lg font-black text-gray-900">${{ formatAmount(detail.expense.patient_responsibility) }}</p>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Provider</p>
+                                <p class="text-sm font-semibold text-gray-800">{{ detail.expense.provider }}</p>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Patient</p>
+                                <p class="text-sm font-semibold text-gray-800 capitalize">{{ detail.expense.patient }}</p>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Category</p>
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold" :class="categoryColor(detail.expense.category)">{{ detail.expense.category }}</span>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Source</p>
+                                <span class="px-2 py-0.5 rounded text-[10px] font-bold" :class="sourceColor(detail.expense.source)">{{ detail.expense.source }}</span>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Evidence Level</p>
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold" :class="evidenceColor(detail.expense.evidence_level)">{{ evidenceBadge(detail.expense.evidence_level) }} {{ evidenceLabel(detail.expense.evidence_level) }}</span>
+                            </div>
+                            <div>
+                                <p class="text-[10px] font-bold text-gray-400 uppercase">Status</p>
+                                <p class="text-sm font-semibold text-gray-800">{{ detail.expense.status }}</p>
+                            </div>
+                        </div>
+
+                        <!-- Financials (if present) -->
+                        <div v-if="detail.expense.amount_billed" class="mb-5 bg-gray-50 rounded-lg p-4">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase mb-2">Financials</p>
+                            <div class="grid grid-cols-3 gap-3 text-sm">
+                                <div>
+                                    <p class="text-[10px] text-gray-400">Billed</p>
+                                    <p class="font-semibold">${{ formatAmount(detail.expense.amount_billed) }}</p>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] text-gray-400">Insurance Paid</p>
+                                    <p class="font-semibold">${{ formatAmount(detail.expense.insurance_paid) }}</p>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] text-gray-400">You Owe</p>
+                                    <p class="font-black text-gray-900">${{ formatAmount(detail.expense.patient_responsibility) }}</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Description -->
+                        <div v-if="detail.expense.description" class="mb-5">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase mb-1">Description</p>
+                            <p class="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg">{{ detail.expense.description }}</p>
+                        </div>
+
+                        <!-- Exclusion -->
+                        <div class="mb-5 bg-gray-50 rounded-lg p-4">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase mb-2">HSA Eligibility</p>
+                            <div v-if="detail.expense.exclusion_reason" class="flex items-center gap-3">
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-600">Excluded: {{ detail.expense.exclusion_reason }}</span>
+                                <button @click="updateExclusion(detail.expense.id, null)"
+                                        class="px-3 py-1 rounded-lg text-xs font-bold bg-green-100 text-green-700 hover:bg-green-200 transition-colors">
+                                    Re-include
+                                </button>
+                            </div>
+                            <div v-else class="flex items-center gap-2">
+                                <span class="text-xs text-green-600 font-bold">Eligible</span>
+                                <span class="text-gray-300 mx-1">|</span>
+                                <span class="text-[10px] text-gray-400">Exclude:</span>
+                                <button v-for="reason in exclusionReasons" :key="reason"
+                                        @click="updateExclusion(detail.expense.id, reason)"
+                                        class="px-2 py-0.5 rounded text-[10px] font-bold bg-gray-200 text-gray-600 hover:bg-red-100 hover:text-red-600 transition-colors">
+                                    {{ reason.replace(/_/g, ' ') }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Linked CC Transaction -->
+                        <div v-if="detail.linked_transaction" class="mb-5 bg-blue-50 rounded-lg p-4">
+                            <p class="text-[10px] font-bold text-blue-400 uppercase mb-2">Payment Proof (CC Transaction)</p>
+                            <div class="grid grid-cols-2 gap-3 text-sm">
+                                <div>
+                                    <p class="text-[10px] text-blue-400">Date</p>
+                                    <p class="font-semibold text-blue-900">{{ detail.linked_transaction.date }}</p>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] text-blue-400">Amount</p>
+                                    <p class="font-semibold text-blue-900">${{ formatAmount(detail.linked_transaction.amount) }}</p>
+                                </div>
+                                <div class="col-span-2">
+                                    <p class="text-[10px] text-blue-400">Description</p>
+                                    <p class="font-semibold text-blue-900">{{ detail.linked_transaction.description }}</p>
+                                </div>
+                                <div>
+                                    <p class="text-[10px] text-blue-400">Source</p>
+                                    <p class="font-semibold text-blue-900">{{ detail.linked_transaction.source }}</p>
+                                </div>
+                                <div v-if="detail.linked_transaction.original_file">
+                                    <p class="text-[10px] text-blue-400">Statement</p>
+                                    <p class="font-semibold text-blue-900 text-xs truncate">{{ detail.linked_transaction.original_file.split('/').pop() }}</p>
+                                </div>
+                            </div>
+                            <div v-if="detail.linked_transaction.original_file" class="mt-3">
+                                <div class="flex items-center gap-2">
+                                    <button @click="previewStatement = !previewStatement"
+                                            class="px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+                                            :class="previewStatement ? 'bg-blue-600 text-white' : 'bg-blue-200 text-blue-800 hover:bg-blue-300'">
+                                        {{ previewStatement ? 'Hide Statement' : 'View Statement' }}
+                                    </button>
+                                    <a :href="'/api/workspace/file?path=' + encodeURIComponent(detail.linked_transaction.original_file)" download
+                                       class="px-3 py-1.5 rounded-lg text-xs font-bold bg-blue-100 text-blue-700 hover:bg-blue-200 transition-colors">
+                                        &#8615;
+                                    </a>
+                                </div>
+                                <div v-if="previewStatement" class="mt-2 rounded-lg overflow-hidden border border-blue-200">
+                                    <iframe :src="'/api/workspace/file?path=' + encodeURIComponent(detail.linked_transaction.original_file)" class="w-full h-[70vh]"></iframe>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Documents -->
+                        <div class="mb-5">
+                            <p class="text-[10px] font-bold text-gray-400 uppercase mb-2">Documents ({{ detail.documents.length }})</p>
+                            <div v-if="detail.documents.length" class="space-y-2">
+                                <div v-for="doc in detail.documents" :key="doc.id">
+                                    <div class="bg-gray-50 rounded-lg p-3 flex items-center justify-between">
+                                        <div>
+                                            <p class="text-sm font-semibold text-gray-800">{{ doc.original_filename }}</p>
+                                            <div class="flex items-center gap-2 mt-0.5">
+                                                <span class="px-2 py-0.5 rounded text-[10px] font-bold" :class="sourceColor(doc.document_type)">{{ doc.document_type }}</span>
+                                                <span class="text-[10px] text-gray-400">{{ doc.ingested_at }}</span>
+                                            </div>
+                                        </div>
+                                        <div class="flex items-center gap-2">
+                                            <button @click="previewDoc = (previewDoc === doc.id ? null : doc.id)"
+                                                    class="px-3 py-1.5 rounded-lg text-xs font-bold transition-colors"
+                                                    :class="previewDoc === doc.id ? 'bg-blue-600 text-white' : 'bg-blue-100 text-blue-700 hover:bg-blue-200'">
+                                                {{ previewDoc === doc.id ? 'Hide' : 'View' }}
+                                            </button>
+                                            <a :href="'/api/hsa/doc/' + doc.id + '/file'" download
+                                               class="px-3 py-1.5 rounded-lg text-xs font-bold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                                               title="Download">
+                                                &#8615;
+                                            </a>
+                                        </div>
+                                    </div>
+                                    <div v-if="previewDoc === doc.id" class="mt-2 rounded-lg overflow-hidden border border-gray-200">
+                                        <iframe :src="'/api/hsa/doc/' + doc.id + '/file'" class="w-full h-[70vh]"></iframe>
+                                    </div>
+                                </div>
+                            </div>
+                            <p v-else class="text-sm text-gray-400 italic">No documents attached</p>
+                        </div>
+
+                        <!-- Sidecar metadata -->
+                        <div v-if="detail.documents.length && detail.documents[0].raw_data" class="mb-5">
+                            <button @click="showRawData = !showRawData"
+                                    class="text-[10px] font-bold text-gray-400 uppercase hover:text-gray-600 cursor-pointer">
+                                Sidecar Metadata {{ showRawData ? '&#9660;' : '&#9654;' }}
+                            </button>
+                            <pre v-if="showRawData" class="mt-2 text-xs text-gray-600 bg-gray-50 p-3 rounded-lg overflow-x-auto max-h-48">{{ JSON.stringify(detail.documents[0].raw_data, null, 2) }}</pre>
+                        </div>
+
+                        <!-- Audit Log -->
+                        <div v-if="detail.audit_log.length">
+                            <button @click="showAuditLog = !showAuditLog"
+                                    class="text-[10px] font-bold text-gray-400 uppercase hover:text-gray-600 cursor-pointer">
+                                Audit Log ({{ detail.audit_log.length }}) {{ showAuditLog ? '&#9660;' : '&#9654;' }}
+                            </button>
+                            <div v-if="showAuditLog" class="mt-2 space-y-1">
+                                <div v-for="(log, i) in detail.audit_log" :key="i"
+                                     class="text-xs text-gray-500 bg-gray-50 px-3 py-1.5 rounded">
+                                    <span class="font-semibold text-gray-700">{{ log.field_name }}</span>:
+                                    <span class="text-red-500 line-through" v-if="log.old_value">{{ log.old_value }}</span>
+                                    <span v-if="log.old_value"> &rarr; </span>
+                                    <span class="text-green-600">{{ log.new_value }}</span>
+                                    <span class="text-gray-400 ml-2">by {{ log.changed_by }} at {{ log.changed_at }}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Actions -->
+                        <div class="pt-4 border-t border-gray-100 flex gap-2">
+                            <button @click="toggleReview(detail.expense)"
+                                    :class="detail.expense.needs_review ? 'bg-orange-100 text-orange-700 hover:bg-orange-200' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'"
+                                    class="flex-1 py-2 rounded-lg text-sm font-bold transition-colors">
+                                <span v-html="detail.expense.needs_review ? '&#9888;' : '&#10003;'"></span>
+                                {{ detail.expense.needs_review ? 'Needs Review — Click to Clear' : 'Reviewed — Click to Flag' }}
+                            </button>
+                            <button @click="deleteExpense(detail.expense.id)"
+                                    class="px-4 py-2 rounded-lg text-sm font-bold bg-red-50 text-red-600 hover:bg-red-100 transition-colors">
+                                Delete
+                            </button>
+                        </div>
+                    </template>
+                </div>
+            </div>
+        </Transition>
+{% endraw %}
+{% endblock %}
+
+{% block vue_app %}
+        createApp({
+            setup() {
+                const loading = ref(true);
+                const allExpenses = ref([]);
+                const summary = ref([]);
+                const patients = ref([]);
+
+                // Date presets
+                const todayDate = new Date();
+                const todayStr = todayDate.toISOString().slice(0, 10);
+                const yr = todayDate.getFullYear();
+                const twelveMo = new Date(todayDate); twelveMo.setFullYear(twelveMo.getFullYear() - 1);
+
+                const datePresets = [
+                    { label: 'All', from: '2000-01-01', to: todayStr },
+                    { label: 'YTD', from: `${yr}-01-01`, to: todayStr },
+                    { label: 'Last 12 mo', from: twelveMo.toISOString().slice(0, 10), to: todayStr },
+                    { label: String(yr - 1), from: `${yr - 1}-01-01`, to: `${yr - 1}-12-31` },
+                    { label: String(yr - 2), from: `${yr - 2}-01-01`, to: `${yr - 2}-12-31` },
+                ];
+
+                const filters = ref({
+                    startDate: '2000-01-01',
+                    endDate: todayStr,
+                    status: '',
+                    patient: '',
+                    needsReview: false,
+                    showExcluded: false,
+                });
+
+                const activePreset = computed(() => {
+                    const match = datePresets.find(p => p.from === filters.value.startDate && p.to === filters.value.endDate);
+                    return match ? match.label : null;
+                });
+
+                const applyPreset = (preset) => {
+                    filters.value.startDate = preset.from;
+                    filters.value.endDate = preset.to;
+                };
+
+                const detail = ref(null);
+                const detailLoading = ref(false);
+                const showRawData = ref(false);
+                const showAuditLog = ref(false);
+                const previewDoc = ref(null);
+                const previewStatement = ref(false);
+                const modalOverlay = ref(null);
+
+                const openDetail = async (id) => {
+                    detailLoading.value = true;
+                    showRawData.value = false;
+                    showAuditLog.value = false;
+                    previewDoc.value = null;
+                    previewStatement.value = false;
+                    detail.value = {};
+                    const resp = await apiFetch(`/api/hsa/${id}/detail`);
+                    detail.value = await resp.json();
+                    detailLoading.value = false;
+                };
+
+                const fetchData = async () => {
+                    loading.value = true;
+                    const params = new URLSearchParams();
+                    if (filters.value.status) params.set('status', filters.value.status);
+                    if (filters.value.patient) params.set('patient', filters.value.patient);
+
+                    const resp = await apiFetch('/api/hsa/data?' + params);
+                    const data = await resp.json();
+                    allExpenses.value = data.expenses;
+                    summary.value = data.summary;
+                    patients.value = data.patients;
+                    loading.value = false;
+                };
+
+                const sortKey = ref('service_date');
+                const sortDir = ref('desc');
+
+                const sortBy = (key) => {
+                    if (sortKey.value === key) { sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'; }
+                    else { sortKey.value = key; sortDir.value = 'asc'; }
+                };
+
+                const expenses = computed(() => {
+                    const start = filters.value.startDate;
+                    const end = filters.value.endDate;
+                    return allExpenses.value.filter(e => {
+                        const d = e.service_date || '';
+                        return d >= start && d <= end;
+                    });
+                });
+
+                const filteredExpenses = computed(() => {
+                    let result = expenses.value;
+                    if (!filters.value.showExcluded) result = result.filter(e => !e.exclusion_reason);
+                    if (filters.value.needsReview) result = result.filter(e => e.needs_review);
+                    return result;
+                });
+
+                const sortedExpenses = computed(() => {
+                    const data = [...filteredExpenses.value];
+                    const key = sortKey.value;
+                    const dir = sortDir.value === 'asc' ? 1 : -1;
+                    return data.sort((a, b) => {
+                        let va = a[key], vb = b[key];
+                        if (key === 'evidence_level') {
+                            va = a.exclusion_reason ? 'zzz_excluded' : (va || '');
+                            vb = b.exclusion_reason ? 'zzz_excluded' : (vb || '');
+                        }
+                        if (key === 'patient_responsibility' || key === 'doc_count') {
+                            va = Number(va) || 0; vb = Number(vb) || 0;
+                        } else {
+                            va = (va || '').toString().toLowerCase();
+                            vb = (vb || '').toString().toLowerCase();
+                        }
+                        if (va < vb) return -1 * dir;
+                        if (va > vb) return 1 * dir;
+                        return 0;
+                    });
+                });
+
+                const auditReadyTotal = computed(() => {
+                    return expenses.value
+                        .filter(e => e.status === 'UNREIMBURSED' && !e.exclusion_reason && (e.evidence_level === 'ready' || e.evidence_level === 'strong'))
+                        .reduce((acc, e) => acc + (e.patient_responsibility || 0), 0);
+                });
+
+                const unreimbursedTotal = computed(() => {
+                    return expenses.value
+                        .filter(e => e.status === 'UNREIMBURSED' && !e.exclusion_reason)
+                        .reduce((acc, e) => acc + (e.patient_responsibility || 0), 0);
+                });
+
+                const excludedCount = computed(() => {
+                    return expenses.value.filter(e => e.exclusion_reason).length;
+                });
+
+                const totalCount = computed(() => expenses.value.length);
+
+                const needsReviewCount = computed(() => {
+                    return expenses.value.filter(e => e.needs_review).length;
+                });
+
+                const stubCount = computed(() => {
+                    return expenses.value.filter(e => e.source === 'cc_stub' && e.needs_review).length;
+                });
+
+                const categoryBreakdown = computed(() => {
+                    const map = {};
+                    for (const e of filteredExpenses.value) {
+                        if (!map[e.category]) map[e.category] = { category: e.category, count: 0, total: 0 };
+                        map[e.category].count++;
+                        map[e.category].total += e.patient_responsibility || 0;
+                    }
+                    return Object.values(map).sort((a, b) => b.total - a.total);
+                });
+
+                const formatAmount = (val) => {
+                    if (val == null) return '0.00';
+                    return Number(val).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                };
+
+                const categoryColor = (cat) => {
+                    const colors = {
+                        medical: 'bg-blue-100 text-blue-700',
+                        dental: 'bg-purple-100 text-purple-700',
+                        vision: 'bg-cyan-100 text-cyan-700',
+                        pharmacy: 'bg-green-100 text-green-700',
+                        mental_health: 'bg-pink-100 text-pink-700',
+                        therapy: 'bg-orange-100 text-orange-700',
+                        lab: 'bg-yellow-100 text-yellow-700',
+                    };
+                    return colors[cat] || 'bg-gray-100 text-gray-700';
+                };
+
+                const sourceColor = (src) => {
+                    const colors = {
+                        receipt: 'bg-green-50 text-green-700',
+                        eob: 'bg-blue-50 text-blue-700',
+                        invoice: 'bg-indigo-50 text-indigo-700',
+                        cc_stub: 'bg-amber-50 text-amber-700',
+                        statement: 'bg-purple-50 text-purple-700',
+                        manual: 'bg-gray-50 text-gray-700',
+                    };
+                    return colors[src] || 'bg-gray-50 text-gray-700';
+                };
+
+                const evidenceBadge = (level) => {
+                    const badges = {
+                        stub: '[ ]', weak: '[?]',
+                        ready: '[✓]', strong: '[✓+]',
+                    };
+                    return badges[level] || '[ ]';
+                };
+
+                const evidenceLabel = (level) => {
+                    const labels = {
+                        stub: 'Stub', weak: 'Weak',
+                        ready: 'Ready', strong: 'Ironclad',
+                    };
+                    return labels[level] || 'Unknown';
+                };
+
+                const evidenceColor = (level) => {
+                    const colors = {
+                        strong: 'bg-emerald-100 text-emerald-700',
+                        ready: 'bg-green-100 text-green-700',
+                        weak: 'bg-amber-100 text-amber-700',
+                        stub: 'bg-gray-100 text-gray-500',
+                    };
+                    return colors[level] || 'bg-gray-100 text-gray-700';
+                };
+
+                const exclusionReasons = ['fsa_paid', 'hra_paid', 'trivial_amount', 'missing_receipt', 'non_qualified'];
+
+                const updateExclusion = async (id, reason) => {
+                    await apiFetch(`/api/hsa/${id}`, {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ exclusion_reason: reason }),
+                    });
+                    if (detail.value && detail.value.expense) detail.value.expense.exclusion_reason = reason;
+                    const match = allExpenses.value.find(e => e.id === id);
+                    if (match) match.exclusion_reason = reason;
+                };
+
+                const deleteExpense = async (id) => {
+                    if (!confirm('Delete this HSA expense? This action is logged in the audit trail.')) return;
+                    await apiFetch(`/api/hsa/${id}`, { method: 'DELETE' });
+                    detail.value = null;
+                    fetchData();
+                };
+
+                const toggleReview = async (exp) => {
+                    const newVal = !exp.needs_review;
+                    await apiFetch(`/api/hsa/${exp.id}/review`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ needs_review: newVal }),
+                    });
+                    exp.needs_review = newVal;
+                    const match = allExpenses.value.find(e => e.id === exp.id);
+                    if (match) match.needs_review = newVal;
+                };
+
+                watch(detail, (val) => {
+                    if (val) nextTick(() => modalOverlay.value?.focus());
+                });
+
+                watch(() => [filters.value.status, filters.value.patient], fetchData);
+                onMounted(fetchData);
+
+                return {
+                    loading, expenses, patients,
+                    filters, filteredExpenses, sortedExpenses,
+                    sortKey, sortDir, sortBy,
+                    datePresets, activePreset, applyPreset,
+                    detail, detailLoading, showRawData, modalOverlay,
+                    showAuditLog, previewDoc, previewStatement,
+                    openDetail,
+                    auditReadyTotal, unreimbursedTotal,
+                    totalCount, needsReviewCount, excludedCount,
+                    stubCount, categoryBreakdown,
+                    formatAmount, categoryColor, sourceColor,
+                    evidenceBadge, evidenceLabel,
+                    evidenceColor, toggleReview, deleteExpense,
+                    exclusionReasons, updateExclusion,
+                };
+            },
+        }).mount('#app');
+{% endblock %}

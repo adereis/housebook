@@ -1,0 +1,32 @@
+#!/bin/bash
+# commit-msg hook: PII denylist scan
+
+COMMIT_MSG_FILE=$1
+COMMIT_SOURCE=$2
+
+# --- Check 1: PII denylist ---
+if [ "$PII_ALLOW" != "true" ]; then
+    DENYLIST="${HOUSEBOOK_WORKSPACE_DIR:+$HOUSEBOOK_WORKSPACE_DIR/config/pii-denylist.txt}"
+
+    if [ -n "$DENYLIST" ] && [ -f "$DENYLIST" ]; then
+        PATTERNS=$(grep -v '^\s*#' "$DENYLIST" | grep -v '^\s*$' | paste -sd'|')
+        if [ -n "$PATTERNS" ]; then
+            HITS=$(grep -v '^#' "$COMMIT_MSG_FILE" | grep -inE "$PATTERNS")
+            if [ -n "$HITS" ]; then
+                exec 1>&2
+                echo ""
+                echo "❌ PII denylist match in commit message:"
+                echo "$HITS"
+                echo ""
+                echo "Denylist: $DENYLIST"
+                echo "Override: PII_ALLOW=true git commit ..."
+                exit 1
+            fi
+        fi
+        echo "✅ Commit message PII check passed." >&2
+    fi
+else
+    echo "⚠️  PII denylist check skipped (PII_ALLOW=true)." >&2
+fi
+
+exit 0
