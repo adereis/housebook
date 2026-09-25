@@ -13,8 +13,10 @@ echo "--- RUNNING LINTING ---"
 
 # Check for trailing whitespaces
 echo "Checking for trailing whitespaces..."
-if grep -rI "[[:space:]]$" . \
-    --exclude-dir={.git,.venv,node_modules,.direnv,.ruff_cache,__pycache__,input-sources}
+# Only files git would commit: tracked and untracked-but-not-ignored.
+# Ignored generated data (the demo workspace's PDFs, whose xref table
+# requires trailing spaces) is not source and must not fail the build.
+if git grep -I -n --untracked "[[:space:]]$" -- . ':!input-sources'
 then
     echo "❌ Trailing whitespaces found! Please remove them."
     exit 1

@@ -5,6 +5,7 @@ import os
 import random
 import sqlite3
 
+from housebook.demo_hsa import seed_hsa, write_hsa_config
 from housebook.migrations.runner import run_migrations
 
 # Constants for the Demo
@@ -483,6 +484,7 @@ def setup_workspace():
     }
     with open(os.path.join(DEMO_WORKSPACE, "config", "user_profile.json"), "w") as f:
         json.dump(profile, f, indent=4)
+    write_hsa_config(DEMO_WORKSPACE)
 
 
 def generate_transactions():
@@ -1004,6 +1006,9 @@ def seed_db():
             ),
         )
 
+    # 5. HSA Shoebox: medical expenses, their documents and card charges
+    seed_hsa(conn, DEMO_WORKSPACE)
+
     conn.commit()
     _print_seed_summary(conn, db_path)
     conn.close()
@@ -1020,6 +1025,11 @@ def _print_seed_summary(conn, db_path):
     c.execute("SELECT COUNT(*) FROM trips WHERE type = 'Work'")
     work_trips = c.fetchone()[0]
 
+    c.execute("SELECT COUNT(*) FROM hsa_expenses")
+    hsa_expenses = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM hsa_documents")
+    hsa_documents = c.fetchone()[0]
+
     c.execute("SELECT COUNT(*) FROM transactions WHERE status = 'UNVERIFIED'")
     unverified = c.fetchone()[0]
 
@@ -1034,6 +1044,7 @@ def _print_seed_summary(conn, db_path):
     print(f"\nDemo database seeded: {db_path}")
     print(f"  Date range : {min_date} → {max_date}")
     print(f"  Trips      : {personal_trips} personal, {work_trips} work")
+    print(f"  HSA        : {hsa_expenses} expenses, {hsa_documents} documents")
     print(f"  UNVERIFIED : {unverified} transactions (audit demo window)")
     print(f"\n  {'Category':<32} {'Count':>5}")
     print(f"  {'-'*32} {'-'*5}")
