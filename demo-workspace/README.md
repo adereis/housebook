@@ -47,10 +47,32 @@ at home, and they stay out of the trip. Everyday home spending (groceries,
 takeout, fuel) pauses while the family is away. On work trips it continues,
 because only Sterling travels. Visits to relatives have no hotel bill.
 
-### 4. Tax Readiness
+### 4. HSA Shoebox
+The family pays medical bills out of pocket and saves the receipts, so they
+can reimburse themselves from the HSA tax-free later. The shoebox holds 13
+fictitious medical expenses from 2023 to 2026, with a receipt or
+insurance-statement PDF you can open for most of them. Between them they
+cover every state the page can show:
+*   **Strong** (three sources agree): Sterling's crown, with the insurer's
+    statement, Maple Dental's receipt and the card charge.
+*   **Ready** (two sources): Ally's glasses, with a receipt and card charge.
+*   **Weak** (needs a math proof): two of Penny's physical-therapy visits,
+    paid with one combined $130 charge.
+*   **Stub** (not enough proof yet): a counseling session paid by check,
+    an unpaid lab bill, and last month's ear-infection visit, which so far
+    exists only as a card charge.
+*   **Excluded**: teeth whitening, which is cosmetic and not HSA-eligible.
+*   **Already withdrawn** (2024) and **pending** (the MRI, in a planned
+    batch).
+
+Only ready and strong expenses count toward "available for withdrawal"
+($534.40 in the demo). The files live in `hsa/YYYY/` beside their JSON
+sidecars, just as a real import leaves them.
+
+### 5. Tax Readiness
 The `tax_documents` table is pre-populated with 5 years of W2s and 1098 Mortgage Interest statements, demonstrating how the system tracks multi-year tax liabilities and deductions.
 
-### 5. The "Audit" Workflow
+### 6. The "Audit" Workflow
 While most of the history is marked as `AGENT_VERIFIED`, the **last 30 days of data** are intentionally left as `UNVERIFIED`. This allows you to demo the live "Monthly Audit" workflow using the `prompts/monthly_audit.md` SOP.
 
 ---

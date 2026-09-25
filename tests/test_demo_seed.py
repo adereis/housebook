@@ -7,6 +7,7 @@ import unittest
 from datetime import date, timedelta
 from unittest.mock import patch
 
+from housebook.core import sidecar
 from housebook.core.trip_detector import extract_location_hints
 from housebook.demo_seed import (
     ITALY_TRIP,
@@ -278,6 +279,89 @@ class TestDemoTrips(unittest.TestCase):
                 (trip["name"],),
             ).fetchone()[0]
             self.assertEqual(n, 0, trip["name"])
+
+
+class TestDemoHsa(unittest.TestCase):
+    """The demo shoebox must look like a real import + reconcile."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.test_root = tempfile.mkdtemp()
+        cls.old_cwd = os.getcwd()
+        os.chdir(cls.test_root)
+        setup_workspace()
+        seed_db()
+        cls.workspace = os.path.abspath("demo-workspace")
+        cls.conn = sqlite3.connect(os.path.join(
+            cls.workspace, "data", "finance.db"))
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.conn.close()
+        os.chdir(cls.old_cwd)
+        shutil.rmtree(cls.test_root)
+
+    def test_every_evidence_level_and_status_is_shown(self):
+        levels = {r for r, in self.conn.execute(
+            "SELECT DISTINCT evidence_level FROM hsa_expenses")}
+        self.assertEqual(levels, {"stub", "weak", "ready", "strong"})
+        statuses = {r for r, in self.conn.execute(
+            "SELECT DISTINCT status FROM hsa_expenses")}
+        self.assertEqual(statuses, {"UNREIMBURSED", "PENDING", "REIMBURSED"})
+        excluded = self.conn.execute(
+            "SELECT COUNT(*) FROM hsa_expenses"
+            " WHERE exclusion_reason IS NOT NULL").fetchone()[0]
+        self.assertEqual(excluded, 1)
+
+    def test_documents_match_their_files_and_sidecars(self):
+        rows = self.conn.execute(
+            "SELECT file_path, file_hash, sidecar_path FROM hsa_documents"
+        ).fetchall()
+        self.assertGreater(len(rows), 10)
+        for file_path, file_hash, sidecar_path in rows:
+            pdf = os.path.join(self.workspace, file_path)
+            self.assertEqual(sidecar.sha256_file(pdf), file_hash)
+            with open(pdf, "rb") as f:
+                self.assertTrue(f.read().startswith(b"%PDF-"))
+            sc = sidecar.load(os.path.join(self.workspace, sidecar_path))
+            self.assertEqual(sc.source, "hsa")
+            self.assertEqual(sc.source_file.path, file_path)
+            processed = self.conn.execute(
+                "SELECT COUNT(*) FROM processed_files WHERE file_path = ?",
+                (sidecar_path,)).fetchone()[0]
+            self.assertEqual(processed, 1, sidecar_path)
+
+    def test_card_charges_prove_the_linked_expenses(self):
+        """The consolidated-payment math proof holds for every charge."""
+        rows = self.conn.execute(
+            "SELECT t.amount, SUM(e.patient_responsibility), COUNT(*)"
+            " FROM hsa_expenses e JOIN transactions t"
+            " ON t.id = e.transaction_id GROUP BY t.id").fetchall()
+        self.assertTrue(any(n > 1 for _, _, n in rows))
+        for charge, total, _ in rows:
+            self.assertAlmostEqual(charge, total, places=2)
+
+    def test_only_uncorroborated_rows_need_review(self):
+        rows = self.conn.execute(
+            "SELECT evidence_level, needs_review, exclusion_reason"
+            " FROM hsa_expenses").fetchall()
+        for level, needs_review, excluded in rows:
+            expected = 0 if excluded or level in ("ready", "strong") else 1
+            self.assertEqual(needs_review, expected, level)
+
+    def test_reimbursed_rows_belong_to_a_completed_batch(self):
+        rows = self.conn.execute(
+            "SELECT e.status, r.status FROM hsa_expenses e"
+            " JOIN hsa_reimbursement_items i ON i.expense_id = e.id"
+            " JOIN hsa_reimbursements r ON r.id = i.reimbursement_id"
+        ).fetchall()
+        self.assertIn(("REIMBURSED", "COMPLETED"), rows)
+        self.assertIn(("PENDING", "PLANNED"), rows)
+        unbatched = self.conn.execute(
+            "SELECT COUNT(*) FROM hsa_expenses WHERE status != 'UNREIMBURSED'"
+            " AND id NOT IN (SELECT expense_id FROM hsa_reimbursement_items)"
+        ).fetchone()[0]
+        self.assertEqual(unbatched, 0)
 
 
 if __name__ == "__main__":

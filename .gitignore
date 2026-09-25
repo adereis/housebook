@@ -26,6 +26,11 @@ input/
 /config/**
 !/config/*.example.json
 
+# Demo workspace: housebook-demo-seed regenerates everything except
+# the tracked README and user profile.
+/demo-workspace/hsa/
+/demo-workspace/config/hsa/
+
 # AI Agent local state
 .claude/
 .antigravitycli/

@@ -60,6 +60,12 @@ audit-log entries, even for flags passed alongside `--evidence-level`
 in the same command. `verify` reports `Verified N of M` when some rows
 were blocked.
 
+**Demo data follows this table.** `housebook-demo-seed` writes a
+shoebox through `src/housebook/demo_hsa.py`, and it derives each demo
+expense's level from the sources on file using this table. Change the
+rules here and `demo_hsa.evidence_level` must change with them;
+`tests/test_demo_seed.py` checks the math proof and file hashes.
+
 ## Document sidecar convention
 
 Documents are pre-processed by an AI agent into structured sidecars.
