@@ -23,12 +23,29 @@ The data isn't static. You'll notice that grocery bills at *Whole Foods* and *Ma
 ### 2. Amazon Granularity
 Unlike standard bank imports that show a vague "Amazon.com" charge, this demo showcases the **Amazon Provider**. Expenses are broken down by product (e.g., *Kindle Paperwhite*, *LEGO Star Wars*, *Blue Buffalo Dog Food*), allowing for precise categorization across *Pets*, *Electronics*, and *Health*.
 
-### 3. Trip Detection & Correlation
-The system has automatically identified and correlated 16 major trips. Look out for the annual family vacation puns:
+### 3. Trips
+The history holds 16 trips, each with its own spending page. Look out for the annual family vacation puns:
 *   **2022**: *The Bull Market Beach Bash* (Hawaii)
 *   **2023**: *The Great Recession Retreat* (White Mountains)
-*   **2025**: *The Dividend Discovery* (Italy)
+*   **2025**: *The Dividend Discovery* (Rome, Florence & Tuscany)
 *   ...plus several professional "Fiduciary Forums" (Work Trips).
+
+**The Dividend Discovery is the showcase.** It is a hand-written two-week
+itinerary for a family of four, about $14k all in:
+*   **Booked months ahead:** flights in February, the Florence apartment and
+    the agriturismo deposit in spring. These count toward the trip even though
+    they fall outside its dates.
+*   **Paid in euros:** each Italian charge shows its USD amount, with the
+    original EUR amount and exchange rate in the transaction's metadata.
+*   **More than hotels and dinners:** a train to Florence, a rental car with a
+    one-way fee, fuel, parking, a cooking class, a pharmacy stop, groceries
+    for the apartment, and airport parking back home in Boston.
+
+Trips are linked by **where** a charge happened, never by date alone. While
+the family is in Italy, the mortgage, utilities and piano lessons still bill
+at home, and they stay out of the trip. Everyday home spending (groceries,
+takeout, fuel) pauses while the family is away. On work trips it continues,
+because only Sterling travels. Visits to relatives have no hotel bill.
 
 ### 4. Tax Readiness
 The `tax_documents` table is pre-populated with 5 years of W2s and 1098 Mortgage Interest statements, demonstrating how the system tracks multi-year tax liabilities and deductions.

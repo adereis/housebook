@@ -93,6 +93,14 @@ AMAZON_PRODUCTS = {
     ],
 }
 
+# Each trip carries what a statement would reveal about it:
+#   statement_city — the "CITY ST" / "CITY CC" tail a card network prints
+#                    on merchant lines (a list for multi-city trips); it is
+#                    what `detect-trips` reads as a location hint
+#   flies          — booked airfare (otherwise the family drove)
+#   lodging        — paid for a hotel (visits to family stay for free)
+# The flagship vacation ("The Dividend Discovery") is not generated from
+# these fields; it has a hand-written itinerary in ITALY_ITINERARY.
 TRIPS = [
     # 2021
     {
@@ -102,6 +110,9 @@ TRIPS = [
         "duration": 7,
         "type": "Personal",
         "location": "Cape Cod, MA",
+        "statement_city": ["HYANNIS MA"],
+        "flies": False,
+        "lodging": True,
     },
     {
         "name": "Q3 Regional Offsite",
@@ -110,6 +121,9 @@ TRIPS = [
         "duration": 3,
         "type": "Work",
         "location": "Austin, TX",
+        "statement_city": ["AUSTIN TX"],
+        "flies": True,
+        "lodging": True,
     },
     {
         "name": "Visit to In-laws",
@@ -118,6 +132,9 @@ TRIPS = [
         "duration": 5,
         "type": "Personal",
         "location": "Philadelphia, PA",
+        "statement_city": ["PHILADELPHIA PA"],
+        "flies": False,
+        "lodging": False,
     },
     # 2022
     {
@@ -127,6 +144,9 @@ TRIPS = [
         "duration": 10,
         "type": "Personal",
         "location": "Honolulu, HI",
+        "statement_city": ["HONOLULU HI"],
+        "flies": True,
+        "lodging": True,
     },
     {
         "name": "Visit to Grandma",
@@ -135,6 +155,9 @@ TRIPS = [
         "duration": 5,
         "type": "Personal",
         "location": "Baltimore, MD",
+        "statement_city": ["BALTIMORE MD"],
+        "flies": False,
+        "lodging": False,
     },
     {
         "name": "Risk Summit 2022",
@@ -143,6 +166,9 @@ TRIPS = [
         "duration": 4,
         "type": "Work",
         "location": "Las Vegas, NV",
+        "statement_city": ["LAS VEGAS NV"],
+        "flies": True,
+        "lodging": True,
     },
     # 2023
     {
@@ -152,6 +178,9 @@ TRIPS = [
         "duration": 4,
         "type": "Personal",
         "location": "White Mountains, NH",
+        "statement_city": ["NORTH CONWAY NH"],
+        "flies": False,
+        "lodging": True,
     },
     {
         "name": "Actuarial World Conference",
@@ -160,6 +189,9 @@ TRIPS = [
         "duration": 3,
         "type": "Work",
         "location": "San Francisco, CA",
+        "statement_city": ["SAN FRANCISCO CA"],
+        "flies": True,
+        "lodging": True,
     },
     {
         "name": "Fall Foliage Trip",
@@ -168,6 +200,9 @@ TRIPS = [
         "duration": 2,
         "type": "Personal",
         "location": "Vermont",
+        "statement_city": ["WOODSTOCK VT"],
+        "flies": False,
+        "lodging": True,
     },
     # 2024
     {
@@ -177,6 +212,9 @@ TRIPS = [
         "duration": 7,
         "type": "Personal",
         "location": "San Diego, CA",
+        "statement_city": ["SAN DIEGO CA"],
+        "flies": True,
+        "lodging": True,
     },
     {
         "name": "European Sales Tour",
@@ -185,6 +223,9 @@ TRIPS = [
         "duration": 12,
         "type": "Work",
         "location": "London/Paris",
+        "statement_city": ["LONDON GB", "PARIS FR"],
+        "flies": True,
+        "lodging": True,
     },
     {
         "name": "Memorial Day Weekend",
@@ -193,6 +234,9 @@ TRIPS = [
         "duration": 3,
         "type": "Personal",
         "location": "Maine",
+        "statement_city": ["BAR HARBOR ME"],
+        "flies": False,
+        "lodging": True,
     },
     # 2025
     {
@@ -201,7 +245,7 @@ TRIPS = [
         "date": "2025-07-01",
         "duration": 14,
         "type": "Personal",
-        "location": "Tuscany, Italy",
+        "location": "Rome, Florence & Tuscany, Italy",
     },
     {
         "name": "Ski Weekend",
@@ -210,6 +254,9 @@ TRIPS = [
         "duration": 3,
         "type": "Personal",
         "location": "Stowe, VT",
+        "statement_city": ["STOWE VT"],
+        "flies": False,
+        "lodging": True,
     },
     {
         "name": "Insurance Forum NYC",
@@ -218,6 +265,9 @@ TRIPS = [
         "duration": 2,
         "type": "Work",
         "location": "New York, NY",
+        "statement_city": ["NEW YORK NY"],
+        "flies": True,
+        "lodging": True,
     },
     # 2026
     {
@@ -227,8 +277,137 @@ TRIPS = [
         "duration": 5,
         "type": "Personal",
         "location": "Savannah, GA",
+        "statement_city": ["SAVANNAH GA"],
+        "flies": True,
+        "lodging": True,
     },
 ]
+
+# The flagship family vacation, written out as a real itinerary rather
+# than generated: two weeks in Italy for a family of four. Rome (4
+# nights) -> train to Florence (4 nights) -> rental car to a Chianti
+# agriturismo (5 nights) -> drop the car at Rome Fiumicino and fly home.
+#
+# What makes it realistic, and what the demo lets you point at:
+# - Big items are booked months ahead (flights, the Florence apartment,
+#   the agriturismo deposit), so a trip's cost starts long before the
+#   trip; they are linked to the trip even though they fall outside it.
+# - Foreign charges are printed in USD but carry the EUR amount and rate
+#   in metadata, the way a card statement shows "EURO 96.00 X 1.17".
+# - Merchant lines end in the city and "IT", which is the signal
+#   `detect-trips` reads as a location hint.
+# - Not everything is dining and hotels: a pharmacy run (Health), a
+#   leather bag (Shopping), groceries for the apartment, fuel, parking.
+# - Meanwhile life at home goes on: the mortgage, utilities and piano
+#   lessons still bill, and they stay out of the trip.
+# Merchants are fictitious (ledger puns) apart from public landmarks and
+# national transport operators.
+ITALY_TRIP = "The Dividend Discovery"
+EUR_USD = 1.17
+# (date, statement description, amount, currency, category)
+ITALY_ITINERARY = [
+    # Booked ahead
+    ("2025-02-11", "DELTA AIR LINES BOS-FCO 4 PAX", 5480.40, "USD", "Flights"),
+    ("2025-02-20", "AGRITURISMO POGGIO DIVIDENDO GREVE IT", 600.00, "EUR",
+     "Lodging"),
+    ("2025-03-02", "HOTEL BILANCIO ROMA IT", 285.00, "EUR", "Lodging"),
+    ("2025-03-09", "CASA DEL CONTABILE FIRENZE IT", 920.00, "EUR", "Lodging"),
+    ("2025-04-15", "MUSEI VATICANI ROMA IT", 88.00, "EUR", "Entertainment"),
+    # Rome
+    ("2025-07-02", "TAXI FIUMICINO ROMA IT", 55.00, "EUR", "Local Transit"),
+    ("2025-07-02", "TRATTORIA IL LIBRO MASTRO ROMA IT", 96.00, "EUR",
+     "Dining & Takeout"),
+    ("2025-07-03", "BAR CAFFE DEL PORTAFOGLIO ROMA IT", 14.40, "EUR",
+     "Dining & Takeout"),
+    ("2025-07-03", "COLOSSEO BIGLIETTERIA ROMA IT", 72.00, "EUR",
+     "Entertainment"),
+    ("2025-07-03", "PIZZERIA LA CEDOLA ROMA IT", 64.00, "EUR",
+     "Dining & Takeout"),
+    ("2025-07-04", "ATAC METRO ROMA IT", 28.00, "EUR", "Local Transit"),
+    ("2025-07-04", "OSTERIA DEI QUATTRO SOLDI ROMA IT", 112.00, "EUR",
+     "Dining & Takeout"),
+    ("2025-07-05", "FARMACIA DEL PANTHEON ROMA IT", 23.50, "EUR", "Health"),
+    ("2025-07-05", "ROMA GUSTO FOOD TOURS ROMA IT", 260.00, "EUR",
+     "Entertainment"),
+    ("2025-07-06", "HOTEL BILANCIO ROMA IT", 855.00, "EUR", "Lodging"),
+    ("2025-07-06", "HOTEL BILANCIO TASSA SOGGIORNO ROMA IT", 48.00, "EUR",
+     "Lodging"),
+    ("2025-07-06", "TRENITALIA ROMA IT", 156.00, "EUR", "Local Transit"),
+    # Florence
+    ("2025-07-06", "GELATERIA DEL CAPITALE FIRENZE IT", 18.00, "EUR",
+     "Dining & Takeout"),
+    ("2025-07-07", "GALLERIA DEGLI UFFIZI FIRENZE IT", 58.00, "EUR",
+     "Entertainment"),
+    ("2025-07-07", "MERCATO CENTRALE FIRENZE IT", 42.80, "EUR", "Groceries"),
+    ("2025-07-07", "TRATTORIA DEL REVISORE FIRENZE IT", 128.00, "EUR",
+     "Dining & Takeout"),
+    ("2025-07-08", "CAFFE DEL DUOMO FIRENZE IT", 11.60, "EUR",
+     "Dining & Takeout"),
+    ("2025-07-08", "CUPOLA DEL DUOMO BIGLIETTI FIRENZE IT", 80.00, "EUR",
+     "Entertainment"),
+    ("2025-07-08", "PELLETTERIA IL BILANCIO FIRENZE IT", 185.00, "EUR",
+     "Shopping & Retail"),
+    ("2025-07-09", "SUPERMERCATO COOP FIRENZE IT", 36.20, "EUR", "Groceries"),
+    ("2025-07-09", "OSTERIA DEL DIVIDENDO FIRENZE IT", 104.00, "EUR",
+     "Dining & Takeout"),
+    # Chianti, by rental car
+    ("2025-07-10", "AUTONOLEGGIO TOSCANA FIRENZE IT", 410.00, "EUR",
+     "Local Transit"),
+    ("2025-07-11", "ENI STATION SIENA IT", 78.00, "EUR", "Auto & Fuel"),
+    ("2025-07-11", "RISTORANTE CAMPO DEI CONTI SIENA IT", 142.00, "EUR",
+     "Dining & Takeout"),
+    ("2025-07-11", "CANTINA DEL CAPITALE GREVE IT", 120.00, "EUR",
+     "Entertainment"),
+    ("2025-07-12", "PARCHEGGIO SAN GIMIGNANO IT", 12.00, "EUR", "Auto & Fuel"),
+    ("2025-07-12", "GELATERIA DELLA PIAZZA SAN GIMIGNANO IT", 16.00, "EUR",
+     "Dining & Takeout"),
+    ("2025-07-13", "SCUOLA DI CUCINA TOSCANA GREVE IT", 340.00, "EUR",
+     "Entertainment"),
+    ("2025-07-13", "ENOTECA DEL REDDITO GREVE IT", 96.00, "EUR", "Groceries"),
+    ("2025-07-14", "TRATTORIA DEL LEDGER GREVE IT", 168.00, "EUR",
+     "Dining & Takeout"),
+    ("2025-07-14", "ENI STATION FIRENZE IT", 64.00, "EUR", "Auto & Fuel"),
+    # Home
+    ("2025-07-15", "AGRITURISMO POGGIO DIVIDENDO GREVE IT", 1150.00, "EUR",
+     "Lodging"),
+    ("2025-07-15", "AUTONOLEGGIO TOSCANA ONE-WAY FEE FIUMICINO IT", 95.00,
+     "EUR", "Local Transit"),
+    ("2025-07-15", "DUTY FREE FIUMICINO IT", 54.00, "EUR",
+     "Shopping & Retail"),
+    ("2025-07-15", "LOGAN AIRPORT PARKING BOSTON MA", 336.00, "USD",
+     "Local Transit"),
+]
+
+# Fictitious merchants for the trips generated from TRIPS; the
+# statement city is appended so each line reads like "HARBORSIDE GRILL
+# HONOLULU HI".
+TRIP_DINING = [
+    "HARBORSIDE GRILL",
+    "THE CORNER TAVERN",
+    "BLUE DOOR CAFE",
+    "OLD MILL DINER",
+    "SALT & PINE KITCHEN",
+    "THE COPPER KETTLE",
+    "MAIN STREET BAGELS",
+    "LANTERN NOODLE BAR",
+]
+TRIP_ACTIVITIES = [
+    "HARBOR BOAT TOURS",
+    "CITY HISTORY MUSEUM",
+    "COASTAL BIKE RENTALS",
+    "AQUARIUM ADMISSION",
+    "SUNSET KAYAK TOURS",
+]
+HOTEL_CHAINS = ["MARRIOTT", "HILTON", "HYATT"]
+
+# Charges that happen at home, day to day. While the whole family is
+# away on a personal trip, none of these occur.
+HOME_DISCRETIONARY = (
+    "Groceries",
+    "Dining & Takeout",
+    "Auto & Fuel",
+    "Wellness",
+)
 
 # Pre-determined home maintenance events (1-2x/year, irregular amounts)
 HOME_MAINTENANCE = [
@@ -314,54 +493,15 @@ def generate_transactions():
     transactions = []
     current_date = start_date
 
-    # Pre-generate trip-specific expenses to ensure they exist
+    # Trip charges come first; each carries the trip it belongs to, so
+    # linking is by what the charge is (a destination merchant or an
+    # advance booking), never by its date alone.
     for trip in TRIPS:
-        t_start = datetime.date.fromisoformat(trip["date"])
-        year_scale = INFLATION_SCALES.get(t_start.year, 1.25)
-        is_work = trip["type"] == "Work"
-        flight_cat = "Work (Reimbursable)" if is_work else "Flights"
-        lodging_cat = "Work (Reimbursable)" if is_work else "Lodging"
-        source = "Chase Sapphire"
-
-        # 1. Airfare (for non-local trips)
-        if trip["location"] not in [
-            "Cape Cod, MA",
-            "White Mountains, NH",
-            "Vermont",
-            "Maine",
-            "Stowe, VT",
-        ]:
-            amount = random.uniform(400, 1200) * year_scale * (4 if not is_work else 1)
-            transactions.append(
-                {
-                    "date": (
-                        t_start - datetime.timedelta(days=random.randint(30, 60))
-                    ).isoformat(),
-                    "description": f"Delta Air Lines - {trip['name']}",
-                    "amount": round(amount, 2),
-                    "category": flight_cat,
-                    "source": source,
-                    "status": "AGENT_VERIFIED",
-                    "original_file": "chase_statement.pdf",
-                }
-            )
-
-        # 2. Hotel
-        hotel_rate = random.uniform(200, 450) * year_scale
-        amount = hotel_rate * trip["duration"]
-        transactions.append(
-            {
-                "date": (
-                    t_start + datetime.timedelta(days=trip["duration"])
-                ).isoformat(),
-                "description": f"Marriott {trip['location']} - {trip['name']}",
-                "amount": round(amount, 2),
-                "category": lodging_cat,
-                "source": source,
-                "status": "AGENT_VERIFIED",
-                "original_file": "chase_statement.pdf",
-            }
-        )
+        if trip["name"] == ITALY_TRIP:
+            transactions.extend(_italy_transactions())
+        else:
+            transactions.extend(_generated_trip_transactions(trip))
+    away = _personal_trip_days()
 
     # Pre-generate home maintenance events
     for date_str, desc, amount in HOME_MAINTENANCE:
@@ -413,8 +553,11 @@ def generate_transactions():
     while current_date <= end_date:
         year_scale = INFLATION_SCALES.get(current_date.year, 1.25)
 
+        # Day-to-day home spending pauses while the family is away.
+        at_home = current_date not in away
+
         # 1. Groceries (Weekly)
-        if current_date.weekday() == 6:  # Sunday
+        if at_home and current_date.weekday() == 6:  # Sunday
             category = "Groceries"
             merchant, min_amt, max_amt = random.choice(MERCHANTS[category])
             amount = random.uniform(min_amt, max_amt) * year_scale
@@ -431,7 +574,7 @@ def generate_transactions():
             )
 
         # 2. Dining (2-3x/week) — mostly Sterling's Chase, occasionally Penny's Amex
-        if random.random() < 0.3:
+        if random.random() < 0.3 and at_home:
             category = "Dining & Takeout"
             merchant, min_amt, max_amt = random.choice(MERCHANTS[category])
             amount = random.uniform(min_amt, max_amt) * year_scale
@@ -451,7 +594,7 @@ def generate_transactions():
             )
 
         # 3. Fuel (Bi-weekly)
-        if current_date.day % 14 == 0:
+        if at_home and current_date.day % 14 == 0:
             category = "Auto & Fuel"
             merchant, min_amt, max_amt = random.choice(MERCHANTS[category])
             amount = random.uniform(min_amt, max_amt) * year_scale
@@ -486,7 +629,7 @@ def generate_transactions():
                 )
 
         # 5. Wellness (2-3 times a month)
-        if random.random() < 0.09:
+        if random.random() < 0.09 and at_home:
             category = "Wellness"
             merchant, min_amt, max_amt = random.choice(MERCHANTS[category])
             amount = random.uniform(min_amt, max_amt) * year_scale
@@ -584,6 +727,119 @@ def generate_transactions():
     return transactions
 
 
+def _trip_dates(trip):
+    start = datetime.date.fromisoformat(trip["date"])
+    return start, start + datetime.timedelta(days=trip["duration"])
+
+
+def _personal_trip_days():
+    """Every day on which the whole family is away from home."""
+    days = set()
+    for trip in TRIPS:
+        if trip["type"] != "Personal":
+            continue
+        start, end = _trip_dates(trip)
+        days.update(
+            start + datetime.timedelta(days=n)
+            for n in range((end - start).days + 1)
+        )
+    return days
+
+
+def _trip_txn(date, description, amount, category, trip, metadata=None):
+    return {
+        "date": date.isoformat(),
+        "description": description,
+        "amount": round(amount, 2),
+        "category": category,
+        "source": "Chase Sapphire",
+        "status": "AGENT_VERIFIED",
+        "original_file": "chase_statement.pdf",
+        "trip": trip,
+        "metadata": metadata,
+    }
+
+
+def _italy_transactions():
+    txns = []
+    for date_str, desc, amount, currency, category in ITALY_ITINERARY:
+        date = datetime.date.fromisoformat(date_str)
+        if currency == "EUR":
+            usd = amount * EUR_USD
+            metadata = {
+                "foreign_amount": amount,
+                "foreign_currency": "EUR",
+                "exchange_rate": EUR_USD,
+            }
+        else:
+            usd, metadata = amount, None
+        txns.append(_trip_txn(date, desc, usd, category, ITALY_TRIP, metadata))
+    return txns
+
+
+def _generated_trip_transactions(trip):
+    """Charges for a trip described only by its TRIPS fields.
+
+    Airfare is booked 30-60 days ahead; the hotel bills at checkout;
+    in between there are meals, getting around, and (on vacations) an
+    outing every few days. On a work trip everything but the outings is
+    Work (Reimbursable), per the mandatory work-trip rule.
+    """
+    start, end = _trip_dates(trip)
+    scale = INFLATION_SCALES.get(start.year, 1.25)
+    is_work = trip["type"] == "Work"
+    cities = trip["statement_city"]
+    name = trip["name"]
+
+    def cat(category):
+        return "Work (Reimbursable)" if is_work else category
+
+    def city_on(day):
+        return cities[min(day * len(cities) // (trip["duration"] + 1),
+                          len(cities) - 1)]
+
+    txns = []
+    if trip["flies"]:
+        travelers = 1 if is_work else 4
+        fare = random.uniform(350, 900) * scale * travelers
+        booked = start - datetime.timedelta(days=random.randint(30, 60))
+        txns.append(_trip_txn(
+            booked, "DELTA AIR LINES", fare, cat("Flights"), name))
+    if trip["lodging"]:
+        rate = random.uniform(180, 380) * scale
+        chain = random.choice(HOTEL_CHAINS)
+        txns.append(_trip_txn(
+            end, f"{chain} {cities[-1]}", rate * trip["duration"],
+            cat("Lodging"), name))
+
+    for day in range(trip["duration"] + 1):
+        date = start + datetime.timedelta(days=day)
+        city = city_on(day)
+        first_or_last = day in (0, trip["duration"])
+        for _ in range(random.randint(1, 2)):
+            meal = random.uniform(15, 45 if is_work else 110) * scale
+            txns.append(_trip_txn(
+                date, f"{random.choice(TRIP_DINING)} {city}", meal,
+                cat("Dining & Takeout"), name))
+        if first_or_last:
+            if trip["flies"]:
+                ride = random.uniform(22, 60) * scale
+                txns.append(_trip_txn(
+                    date, f"UBER TRIP {city}", ride,
+                    cat("Local Transit"), name))
+            else:
+                fuel = random.uniform(45, 75) * scale
+                txns.append(_trip_txn(
+                    date, f"SHELL OIL {city}", fuel, cat("Auto & Fuel"),
+                    name))
+        elif not is_work and day % 3 == 1:
+            outing = random.uniform(40, 160) * scale
+            txns.append(_trip_txn(
+                date, f"{random.choice(TRIP_ACTIVITIES)} {city}", outing,
+                "Entertainment", name))
+    return txns
+
+
 def seed_db():
     db_path = get_db_path()
     if os.path.exists(db_path):
@@ -618,41 +874,10 @@ def seed_db():
     # 2. Seed Transactions
     txns = generate_transactions()
 
-    # Categories that should be linked to trips if they occur during trip dates
-    TRAVEL_LINK_CATEGORIES = [
-        "Dining & Takeout",
-        "Flights",
-        "Lodging",
-        "Local Transit",
-        "Entertainment",
-        "Auto & Fuel",
-        "Groceries",
-        "Work (Reimbursable)",
-    ]
-
     for t in txns:
-        # Link to trips if date matches AND category is travel-related
-        trip_id = None
+        trip_id = trip_id_map.get(t.get("trip"))
         t_dt = datetime.date.fromisoformat(t["date"])
-
-        # Only link if the category is something likely to be part of a trip
-        if t["category"] in TRAVEL_LINK_CATEGORIES:
-            for t_name, tid in trip_id_map.items():
-                # Find the trip data to get start/end
-                trip_info = next(item for item in TRIPS if item["name"] == t_name)
-                t_start = datetime.date.fromisoformat(trip_info["date"])
-                t_end = t_start + datetime.timedelta(days=trip_info["duration"])
-                if t_start <= t_dt <= t_end:
-                    trip_id = tid
-                    # If it's a work trip, override category for dining/travel
-                    if trip_info["type"] == "Work" and t["category"] in [
-                        "Flights",
-                        "Lodging",
-                        "Local Transit",
-                        "Dining & Takeout",
-                    ]:
-                        t["category"] = "Work (Reimbursable)"
-                    break
+        metadata = t.get("metadata")
 
         # Recent transactions (last 30 days) should be UNVERIFIED and need review
         is_recent = t_dt > (datetime.date(2026, 4, 3) - datetime.timedelta(days=30))
@@ -662,8 +887,8 @@ def seed_db():
         c.execute(
             "INSERT INTO transactions"
             " (date, description, amount, category, source,"
-            " status, original_file, needs_review, trip_id)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " status, original_file, needs_review, trip_id, metadata)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 t["date"],
                 t["description"],
@@ -674,6 +899,7 @@ def seed_db():
                 t["original_file"],
                 needs_review,
                 trip_id,
+                json.dumps(metadata) if metadata else None,
             ),
         )
 
