@@ -264,7 +264,7 @@ directory's `CLAUDE.md` on-demand** the moment you read any file in
 that directory, and resolves its `@import` — so the module's deep
 reference reaches context exactly when you're working that source and
 stays out of it otherwise. The `AGENTS.md` holds the content so other
-agents (e.g. Gemini) that read `AGENTS.md` directly get it too.
+agents (e.g. Codex, Gemini) that read `AGENTS.md` directly get it too.
 (Verified empirically: a bare `AGENTS.md` is *not* auto-loaded — only
 `CLAUDE.md` is — and HTML comments are stripped from injected files.)
 This root file is the always-loaded router: cross-cutting concerns
@@ -307,7 +307,7 @@ $WORKSPACE/config/<source>/...      ← LIVE per-source config (NOT in repo)
 prompts/<source>/...                ← per-source SOPs (import, audit, …)
 prompts/import.md                   ← unified entry point
 prompts/reingest.md                 ← repair/re-ingest runbook (correcting historical data)
-src/housebook/<source>/AGENTS.md   ← per-source module doc (content; read by Gemini et al.)
+src/housebook/<source>/AGENTS.md   ← per-source module doc (content; read by Codex, Gemini et al.)
 src/housebook/<source>/CLAUDE.md   ← one-line `@AGENTS.md` stub (Claude auto-loads on-demand)
 src/housebook/<source>/    ← isolated module
 ```
@@ -425,7 +425,7 @@ the built assets ship with the Python package.
 This project is an autonomous financial analysis system designed to be orchestrated by an AI Agent. It ingests credit card statements, Amazon order history, tax documents, and HSA medical receipts through a unified import→sidecar→ingest pipeline. An AI agent imports raw documents (PDFs, XLSX, CSVs) from any location, creating structured JSON sidecars in the workspace; deterministic Python code ingests the sidecars into a SQLite database.
 
 ## Architectural Philosophy: Agent-Orchestration
-Unlike traditional applications that call AI APIs internally, this system uses the AI Agent (Claude Code, Gemini CLI, or similar) as the **Control Plane**.
+Unlike traditional applications that call AI APIs internally, this system uses the AI Agent (Claude Code, Codex, Gemini CLI, or similar) as the **Control Plane**.
 
 1.  **Dumb Pipes**: Core logic resides in `src/housebook/`. Python scripts handle structured data (XLSX, CSV) and basic PDF text extraction. Everything ingested is marked as `UNVERIFIED`.
 2.  **Agent Orchestration**: The AI Agent executes CLI tools (`housebook-cc ingest`, `housebook-audit detect-trips`, `housebook-hsa scan`, etc.), handles errors, and populates configuration files.
