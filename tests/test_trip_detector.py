@@ -139,6 +139,29 @@ class TestTripDetector(unittest.TestCase):
         ]
         self.assertEqual(extract_location_hints(txs), "MA")
 
+    def test_location_trip_abroad_with_home_airport_parking(self):
+        """One home-state charge does not outvote a trip abroad."""
+        txs = [{"description": "TRATTORIA DEL CENTRO ROMA IT"}] * 5
+        txs.append({"description": "LOGAN AIRPORT PARKING BOSTON MA"})
+        self.assertEqual(extract_location_hints(txs), "IT")
+
+    def test_location_domestic_trip_with_foreign_billed_ride(self):
+        """One foreign-billed charge does not make a domestic trip abroad."""
+        txs = [{"description": "HARBOR GRILL SAN DIEGO CA"}] * 4
+        txs.append({"description": "UBER TRIP NL"})
+        self.assertEqual(extract_location_hints(txs), "CA")
+
+    def test_location_one_vote_per_transaction(self):
+        """A company suffix before the state is not a second location."""
+        txs = [{"description": "ACME CO NY"}] * 3
+        self.assertEqual(extract_location_hints(txs), "NY")
+
+    def test_location_ambiguous_code_follows_trip_context(self):
+        """IN reads as India on a trip abroad, beating the lone FR."""
+        txs = [{"description": "HOTEL CHENNAI IN"}] * 3
+        txs.append({"description": "CAFE PARIS FR"})
+        self.assertEqual(extract_location_hints(txs), "IN")
+
     def test_location_no_match(self):
         txs = [
             {"description": "SOME RANDOM MERCHANT"},
