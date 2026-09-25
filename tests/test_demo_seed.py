@@ -247,14 +247,17 @@ class TestDemoTrips(unittest.TestCase):
                 places=2)
 
     def test_trip_descriptions_carry_a_location_hint(self):
-        """Charges made abroad end in the country, as detect-trips reads."""
-        trip_id, start, end = self._trip(ITALY_TRIP)
+        """Statement lines end in the place, as detect-trips reads.
+
+        The trip includes parking at the home airport ("BOSTON MA"),
+        which must not outvote the charges made in Italy.
+        """
+        trip_id, _, _ = self._trip(ITALY_TRIP)
         rows = self.conn.execute(
-            "SELECT description FROM transactions WHERE trip_id = ?"
-            " AND date BETWEEN ? AND ? AND metadata IS NOT NULL",
-            (trip_id, start, end),
+            "SELECT description FROM transactions WHERE trip_id = ?",
+            (trip_id,),
         ).fetchall()
-        self.assertGreater(len(rows), 20)
+        self.assertIn(("LOGAN AIRPORT PARKING BOSTON MA",), rows)
         hint = extract_location_hints([{"description": d} for d, in rows])
         self.assertEqual(hint, "IT")
 

@@ -176,48 +176,44 @@ def extract_location_hints(transactions):
 
     CC merchants typically end with a 2-letter code: US states for
     domestic transactions, ISO country codes for international.
-    When a code is ambiguous (e.g., "IN" = Indiana or India), the
-    majority context wins — if most matches are US states, the
-    ambiguous code is treated as a state; otherwise as a country.
-    """
-    us_counts = Counter()
-    intl_counts = Counter()
 
+    Each transaction casts one vote: the rightmost known code among
+    its last three tokens ("ACME CO NY" votes NY, not CO too).
+    Unambiguous votes decide the context — more country codes than
+    US states means an international trip, and ties go international,
+    the signal state-only matching used to miss. The most common code
+    valid in that context wins, so an ambiguous code ("IN" = Indiana
+    or India) is read the way the rest of the trip reads.
+
+    A majority, not mere presence, sets the context: a trip abroad
+    that includes parking at the home airport ("BOSTON MA") is still
+    abroad, and a domestic trip with one foreign-billed ride ("UBER
+    TRIP NL") is still domestic.
+    """
+    votes = Counter()
     for tx in transactions:
         tokens = tx["description"].upper().split()
-        for token in tokens[-3:]:
+        for token in reversed(tokens[-3:]):
             cleaned = token.strip(",.")
-            if not cleaned or len(cleaned) != 2:
-                continue
-            is_us = cleaned in US_STATES
-            is_intl = cleaned in INTL_COUNTRY_CODES
-            if is_us and not is_intl:
-                us_counts[cleaned] += 1
-            elif is_intl and not is_us:
-                intl_counts[cleaned] += 1
-            elif is_us and is_intl:
-                us_counts[cleaned] += 1
-                intl_counts[cleaned] += 1
+            if cleaned in US_STATES or cleaned in INTL_COUNTRY_CODES:
+                votes[cleaned] += 1
+                break
 
-    if not us_counts and not intl_counts:
+    if not votes:
         return None
 
-    # If we have unambiguous international matches, prefer them
-    # (international trips are the signal we were missing).
-    pure_intl = {
-        k: v for k, v in intl_counts.items()
-        if k not in _AMBIGUOUS_CODES
-    }
-    pure_us = {
-        k: v for k, v in us_counts.items()
-        if k not in _AMBIGUOUS_CODES
-    }
-
-    if pure_intl and not pure_us:
-        return max(pure_intl, key=pure_intl.get)
-    if pure_us:
-        return max(pure_us, key=pure_us.get)
-
-    # All matches are ambiguous — fall back to highest count
-    all_counts = us_counts + intl_counts
-    return all_counts.most_common(1)[0][0]
+    us_votes = sum(
+        n for code, n in votes.items()
+        if code in US_STATES and code not in _AMBIGUOUS_CODES
+    )
+    intl_votes = sum(
+        n for code, n in votes.items()
+        if code in INTL_COUNTRY_CODES and code not in _AMBIGUOUS_CODES
+    )
+    if us_votes == intl_votes == 0:
+        return votes.most_common(1)[0][0]
+    context = INTL_COUNTRY_CODES if intl_votes >= us_votes else US_STATES
+    in_context = Counter(
+        {code: n for code, n in votes.items() if code in context}
+    )
+    return in_context.most_common(1)[0][0]
