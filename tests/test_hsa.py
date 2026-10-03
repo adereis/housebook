@@ -218,6 +218,51 @@ class TestHsaMigration(unittest.TestCase):
             f"Missing indexes: {expected - indexes}",
         )
 
+    def test_migration_clears_scanner_self_patient(self):
+        """Migration 023 blanks the scanner's 'self' placeholder on CC
+        stubs only, and logs each change."""
+        from pathlib import Path
+
+        import housebook.migrations as migrations_pkg
+        from housebook.migrations.runner import run_migrations
+
+        run_migrations(self.db_path, verbose=False)
+        conn = sqlite3.connect(self.db_path)
+        rows = [
+            ("cc_stub", "self"),     # scanner placeholder: cleared
+            ("cc_stub", "penny"),    # assigned stub: kept
+            ("receipt", "self"),     # documented record: never touched
+        ]
+        for source, patient in rows:
+            conn.execute(
+                "INSERT INTO hsa_expenses "
+                "(service_date, provider, patient, "
+                "patient_responsibility, source) "
+                "VALUES ('2025-05-01', 'Maple Dental', ?, 40.0, ?)",
+                (patient, source),
+            )
+        conn.commit()
+
+        script = (
+            Path(migrations_pkg.__file__).parent
+            / "023_cc_stub_patient_unassigned.sql"
+        )
+        conn.executescript(script.read_text())
+
+        patients = [
+            r[0] for r in conn.execute(
+                "SELECT patient FROM hsa_expenses ORDER BY id"
+            )
+        ]
+        log = conn.execute(
+            "SELECT record_id, old_value, new_value FROM hsa_audit_log "
+            "WHERE field_name = 'patient'"
+        ).fetchall()
+        conn.close()
+
+        self.assertEqual(patients, [None, "penny", "self"])
+        self.assertEqual(log, [(1, "self", None)])
+
 
 class TestHsaIngestor(unittest.TestCase):
     def setUp(self):
@@ -506,8 +551,13 @@ class TestHsaScanner(unittest.TestCase):
 
         conn = sqlite3.connect(self.db_path)
         count = conn.execute("SELECT COUNT(*) FROM hsa_expenses").fetchone()[0]
+        patients = {
+            r[0] for r in conn.execute("SELECT patient FROM hsa_expenses")
+        }
         conn.close()
         self.assertEqual(count, 2)
+        # A card charge names no patient, so the stub claims none.
+        self.assertEqual(patients, {None})
 
     def test_scan_deduplicates(self):
         scan_cc_transactions(
@@ -906,6 +956,56 @@ class TestHsaCli(unittest.TestCase):
         fields = {log["field_name"] for log in logs}
         self.assertIn("category", fields)
         self.assertIn("needs_review", fields)
+
+    def _insert_unassigned(self, evidence_level):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO hsa_expenses "
+            "(service_date, provider, patient, patient_responsibility, "
+            "category, source, status, evidence_level) "
+            "VALUES ('2025-05-01', 'Maple Dental', NULL, 40.0, "
+            "'dental', 'cc_stub', 'UNREIMBURSED', ?)",
+            (evidence_level,),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_summary_labels_unassigned_patient(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from housebook.hsa.cli import cmd_summary
+
+        self._insert_unassigned("stub")
+        args = type("Args", (), {
+            "db_path": self.db_path, "year": None, "patient": None,
+            "json_output": False,
+        })()
+        f = io.StringIO()
+        with redirect_stdout(f):
+            cmd_summary(args)
+        self.assertIn("unassigned", f.getvalue())
+
+    def test_check_flags_reimbursable_without_patient(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from housebook.hsa.cli import cmd_check
+
+        self._insert_unassigned("ready")
+        args = type("Args", (), {
+            "db_path": self.db_path, "json_output": True,
+            "verify_hashes": False,
+        })()
+        f = io.StringIO()
+        with redirect_stdout(f):
+            cmd_check(args)
+        flagged = [
+            i for i in json.loads(f.getvalue())["issues"]
+            if i["type"] == "reimbursable_without_patient"
+        ]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0]["severity"], "warning")
 
     def test_summary_json_output(self):
         import io

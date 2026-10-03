@@ -260,7 +260,10 @@ def scan_cc_transactions(
                 (
                     r["date"],
                     resolved_provider,
-                    "self",
+                    # A card charge names no patient. Leave it blank
+                    # until a document or cardholder data names one;
+                    # a placeholder would read as the account holder.
+                    None,
                     r["description"],
                     float(r["amount"]),
                     hsa_category,

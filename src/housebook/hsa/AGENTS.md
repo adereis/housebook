@@ -167,6 +167,15 @@ for medical-category expenses and keyword matches, then creates stub
 entries in `hsa_expenses` with `source='cc_stub'`. Amazon
 transactions are excluded. Stubs are deduplicated by `transaction_id`.
 
+A stub's patient is left blank (NULL). A card charge names no patient,
+and the old `'self'` placeholder read as the account holder without
+evidence (migration 023 cleared it from existing stubs). The patient
+arrives from the receipt or EOB a stub is merged into, or from
+`verify --patient` when evidence such as cardholder data names one.
+`summary` shows blanks as `unassigned`, and `check` warns when a
+`ready` or `strong` expense has no patient, because reimbursement
+must show whose expense it was.
+
 A workspace can set a minimum amount per HSA category
 (`min_amount_by_category`). A charge below its category's minimum is
 held back: no stub is written, and the scan reports it instead

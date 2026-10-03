@@ -199,6 +199,13 @@ housebook-hsa verify <ids> --evidence-level ready
 housebook-hsa verify <ids> --evidence-level strong
 ```
 
+CC stubs arrive with no patient. Merging into a receipt or EOB keeps
+the document's patient. A stub promoted to `ready` on its own (a plan
+installment, for example) needs `--patient`, and only when evidence
+names one: cardholder data, or a plan or account document. Otherwise
+leave it blank and list it for the user; `check` warns about any
+reimbursable expense without a patient.
+
 Two `verify` side effects to keep in mind. First, `--notes` replaces
 the notes field rather than appending to it. To add a line to a
 merged record, pass its existing notes plus the new line, or the

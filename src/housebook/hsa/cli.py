@@ -178,7 +178,7 @@ def cmd_summary(args):
             status_mark = " [pending]"
 
         print(
-            f"    {r['patient']:<10s}  {r['category']:<15s}  "
+            f"    {r['patient'] or 'unassigned':<10s}  {r['category']:<15s}  "
             f"{r['count']:3d} items  "
             f"${r['total']:>10,.2f}{status_mark}"
         )
@@ -496,6 +496,27 @@ def cmd_check(args):
                 f"Weak evidence without payment link: "
                 f"id={o['id']} {o['provider']} "
                 f"${o['patient_responsibility']:.2f}"
+            ),
+        })
+
+    # A reimbursable expense must show whose expense it was. The CC
+    # scanner leaves patient blank, so a stub promoted to ready
+    # without --patient lands here.
+    no_patient = conn.execute("""
+        SELECT id, provider, service_date
+        FROM hsa_expenses
+        WHERE evidence_level IN (?, ?)
+          AND status != 'DELETED'
+          AND (patient IS NULL OR patient = '')
+    """, REIMBURSABLE_LEVELS).fetchall()
+
+    for n in no_patient:
+        issues.append({
+            "type": "reimbursable_without_patient",
+            "severity": "warning",
+            "message": (
+                f"Reimbursable but no patient: id={n['id']} "
+                f"{n['provider']} on {n['service_date']}"
             ),
         })
 
