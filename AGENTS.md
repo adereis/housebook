@@ -216,13 +216,16 @@ the spending total — this reflects actual net spending.
 CC payments are excluded from spending views only once their
 category is `CC Payment`. The CC *ingestor* does NOT categorize — it
 is constructed with no `Intelligence` and writes the sidecar's
-category or `Uncategorized`. **Consequence:** freshly-ingested,
-not-yet-audited CC rows are `Uncategorized`, so the large payment
-credits are not yet excluded from spending views — a just-ingested
-card can show a misleading (even negative) spending total until it
-is audited.
+category or `Uncategorized`. The import SOP therefore sets
+`CC Payment` in the sidecar for unambiguous card-payment lines (a
+negative amount carrying the issuer's payment-received wording), so
+those credits are excluded from the moment they are ingested.
+**Consequence when a sidecar leaves it null:** the row lands
+`Uncategorized`, the large payment credit stays visible, and a
+just-ingested card can show a misleading (even negative) spending
+total until it is audited.
 
-**How `CC Payment` actually gets set — and two traps.** It is *not*
+**How `CC Payment` gets set at audit time — and two traps.** It is *not*
 applied by `CC_PAYMENT_PATTERNS` (that engine lives in
 `core/intelligence.py` and is only consulted by the *ingestors'*
 `Intelligence`, e.g. Amazon, which categorizes at ingest — the CC
@@ -237,12 +240,15 @@ is still generic. So `CC Payment` is set during audit *only if*
   old statements) is almost entirely *outside* `apply-rules`' scope —
   it will categorize almost nothing. Tag those rows directly with
   `housebook-audit verify <ids> --category "CC Payment"`.
-- **Wording / category mismatch:** the live `rules.json` payment
-  keywords (`AUTOPAY`, `PAYMENT RECEIVED`, `PYMT`, …) map to
-  `Transfers & Refunds` (which is *not* a spending-view exclusion)
-  and do **not** match Chase's `Payment Thank You-Mobile` or
-  `AUTOMATIC PAYMENT - THANK YOU`. Such credits stay `Uncategorized`
-  and visible until manually verified as `CC Payment`.
+- **First match wins, in file order:** `apply-rules` walks the
+  categories in `rules.json` order and stops at the first keyword
+  that matches as a whole word, ignoring case. A generic keyword such
+  as `PYMT` or `AUTOPAY` under `Transfers & Refunds` (which is *not*
+  a spending-view exclusion) therefore beats a `CC Payment` keyword
+  listed later. Keep the `CC Payment` category *first* in the file,
+  with each issuer's exact payment wording; issuers phrase it
+  differently (`PAYMENT - THANK YOU`, `AUTOPAY PAYMENT RECEIVED`, …),
+  so add each new wording as you meet it.
 
 Once categorized, `CC Payment` rows stay in the DB but are excluded
 from all spending views. (Amazon, by contrast, categorizes at

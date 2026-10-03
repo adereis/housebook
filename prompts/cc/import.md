@@ -98,6 +98,16 @@ verify:
 4. **Transaction count and sum match expectations** — if DB-assisted,
    match the DB exactly. If from-scratch, verify against the
    statement's printed totals or page-bottom subtotals.
+5. **Transactions sum to closing − opening balance** (to the cent).
+   Every charge, credit, fee, and interest line is a transaction, so
+   the identity holds on every statement. It is the strongest
+   from-scratch check: a dropped line shows up as an exact gap (a
+   missing `.99` charge, a missing `$5,000.00` payment).
+6. **Each statement starts the day after the previous one for that
+   card ended.** A gap usually means a missing statement, but store
+   cards and rarely used cards issue no statement for a cycle that
+   ends at a $0 balance; confirm against the issuer's list before
+   calling it missing.
 
 If any check fails, **stop and escalate** — do not write the sidecar.
 
@@ -179,7 +189,14 @@ Destination: `$WORKSPACE/cc/<YYYY>/` where YYYY = end_year.
 ```
 
 - `category` may be null — the audit SOP (`monthly_audit.md`)
-  handles categorization after ingest.
+  handles categorization after ingest. **Exception:** set
+  `"CC Payment"` on unambiguous card-payment lines (a negative amount
+  with the issuer's payment-received wording). The CC ingestor does
+  not categorize, so a null here leaves the payment credit visible
+  and can make a fresh card's spending total misleading or negative
+  until the audit runs. Match the wording, not just the word
+  "PAYMENT": a merchant credit can contain it too (e.g. a
+  `GOOGLE … PAYMENT` refund).
 - `metadata` is free-form JSON for extra context the PDF provides
   (e.g., Amex's merchant category, flight details, passenger names).
 - `page` is 1-indexed. Populate if you can; null is acceptable.
