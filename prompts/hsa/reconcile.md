@@ -31,7 +31,7 @@ housebook-hsa scan --dry-run --json    # 2. Create CC stubs
 housebook-hsa scan
 housebook-hsa candidates --json        # 3. Auto-match
                                       # 4. Agent reviews matches
-housebook-hsa merge <src> <tgt>        #    or merges manually
+housebook-hsa merge <expense> <stub>   #    or merges manually
 housebook-hsa verify <ids> --evidence-level ready  # 5. Set levels
 housebook-hsa check                    # 6. Quality check
 housebook-hsa summary --json           # 7. Report
@@ -61,6 +61,15 @@ The scanner queries the `transactions` table for medical-category
 expenses and keyword matches, then creates `cc_stub` entries in
 `hsa_expenses`. Each stub links to its CC transaction via
 `transaction_id`.
+
+Before running the real scan, review the dry run for false positives
+and non-eligible merchants, and propose `exclusion_patterns` for
+them. Check `hsa_audit_log` for stubs the user already soft-deleted:
+their reasons are precedent for what the user considers ineligible.
+Charges under a workspace's `min_amount_by_category` are listed as
+held back, not stubbed. If a held-back charge looks worth
+documenting, raise it with the user rather than lowering the
+minimum on your own.
 
 **CC provenance is now available**: each CC transaction has a
 `source_file_path` pointing to the canonical statement PDF
@@ -97,12 +106,23 @@ For each candidate match, decide:
 ### 4a. Straightforward match (expense → CC stub, 1:1)
 
 ```bash
-housebook-hsa merge <stub_id> <expense_id>
+housebook-hsa merge <expense_id> <stub_id>
 ```
 
-Merge transfers payment metadata from the CC stub to the service
-record. The stub is marked deleted; the expense inherits its
-`transaction_id` and payment proof.
+`merge` keeps its first argument and deletes the second, so the
+service record goes first. Reversed, it would keep the bare card stub
+and delete the documented receipt or EOB. Merge transfers payment
+metadata (`transaction_id`, `payment_method`, `payment_date`) from
+the CC stub into empty fields of the service record. The stub is
+marked deleted; the expense inherits its payment proof. Patient and
+provider are never copied, so the stub's placeholder patient cannot
+overwrite a real one.
+
+The candidate matcher ranks pairs by each provider's
+`expected_billing_lag_days`. When one EOB matches a run of
+same-amount charges (a recurring copay, for example), pick the
+charge at the provider's observed lag, not the matcher's top score.
+If the observed lag differs from the config, fix the config.
 
 ### 4b. Consolidated payment (one CC charge → multiple services)
 
@@ -178,6 +198,13 @@ the reimbursable total. Never reimburse `stub` or `weak`.
 housebook-hsa verify <ids> --evidence-level ready
 housebook-hsa verify <ids> --evidence-level strong
 ```
+
+Two `verify` side effects to keep in mind. First, `--notes` replaces
+the notes field rather than appending to it. To add a line to a
+merged record, pass its existing notes plus the new line, or the
+merge trail is lost; the audit log keeps the old value if that
+happens. Second, every `verify` call clears `needs_review`. Use it
+only on rows you have actually reviewed.
 
 ## Step 6: Quality Check and Report
 
