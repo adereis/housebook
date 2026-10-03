@@ -612,33 +612,52 @@ def cmd_scan(args):
         scan_cc_transactions,
     )
 
-    stubs = scan_cc_transactions(
-        db_path=args.db_path,
-        dry_run=args.dry_run,
-    )
+    try:
+        result = scan_cc_transactions(
+            db_path=args.db_path,
+            dry_run=args.dry_run,
+        )
+    except ValueError as e:
+        print(f"  Invalid scanner config: {e}")
+        sys.exit(1)
 
     if args.json_output:
-        print(json.dumps(stubs, indent=2, default=str))
+        print(json.dumps(
+            {"stubs": result.stubs, "below_minimum": result.below_minimum},
+            indent=2, default=str,
+        ))
         return
 
+    stubs = result.stubs
     if not stubs:
         print("  No new medical transactions found.")
-        return
+    else:
+        prefix = "Would create" if args.dry_run else "Created"
+        print(f"\n  {prefix} {len(stubs)} HSA stub(s):\n")
 
-    prefix = "Would create" if args.dry_run else "Created"
-    print(f"\n  {prefix} {len(stubs)} HSA stub(s):\n")
+        for s in stubs:
+            provider = (s["provider"] or "")[:40]
+            print(
+                f"    {s['service_date']}  ${s['amount']:>9,.2f}  "
+                f"{s['category']:<12s}  {provider}"
+            )
 
-    for s in stubs:
-        provider = (s["provider"] or "")[:40]
+        total = sum(s["amount"] for s in stubs)
+        print(f"\n  Total: ${total:,.2f}")
+
+    # Held-back charges are never stubbed, so each scan finds them
+    # again. Summarize per category instead of relisting every row.
+    held = {}
+    for s in result.below_minimum:
+        count, amount, minimum = held.get(s["category"], (0, 0.0, s["minimum"]))
+        held[s["category"]] = (count + 1, amount + s["amount"], minimum)
+    for category, (count, amount, minimum) in sorted(held.items()):
         print(
-            f"    {s['service_date']}  ${s['amount']:>9,.2f}  "
-            f"{s['category']:<12s}  {provider}"
+            f"  Held back {count} {category} charge(s) under "
+            f"${minimum:,.2f} (${amount:,.2f}, min_amount_by_category)"
         )
 
-    total = sum(s["amount"] for s in stubs)
-    print(f"\n  Total: ${total:,.2f}")
-
-    if args.dry_run:
+    if args.dry_run and stubs:
         print("\n  (dry run - no changes written)")
 
 

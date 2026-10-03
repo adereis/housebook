@@ -167,6 +167,19 @@ for medical-category expenses and keyword matches, then creates stub
 entries in `hsa_expenses` with `source='cc_stub'`. Amazon
 transactions are excluded. Stubs are deduplicated by `transaction_id`.
 
+A workspace can set a minimum amount per HSA category
+(`min_amount_by_category`). A charge below its category's minimum is
+held back: no stub is written, and the scan reports it instead
+(`below_minimum` in `scan --json`, a per-category "Held back" line in
+the text output). A held-back charge stays unlinked, so every later
+scan reports it again; that is the visible cost of the filter. A
+charge equal to the minimum still becomes a stub. The code owns the
+mechanism and the workspace owns the policy: which categories carry a
+minimum, and how high, is never hard-coded.
+
+`scan --json` therefore prints an object, `{"stubs": [...],
+"below_minimum": [...]}`, not a bare list.
+
 ## Config files
 
 - **`config/hsa/providers.json`** — Provider alias mapping
@@ -183,7 +196,15 @@ transactions are excluded. Stubs are deduplicated by `transaction_id`.
   scanner's built-in keywords, which cover only generic words
   ("hospital", "clinic") and national chains. List your regional
   hospital network there when its card descriptor carries no generic
-  word. See `config/hsa/scanner.example.json` for the structure.
+  word. Both lists are substrings inside SQL `LIKE`, so `_` and `%`
+  act as wildcards while `*` is literal (`abc*` matches
+  "ABC*FITNESS", not "ABCMEDSUPPLY"). `min_amount_by_category` maps
+  a scanner category (`pharmacy`, `medical`, `dental`, `vision`,
+  `mental_health`, `lab`) to a minimum amount. Use it for retail-pharmacy noise, where a small
+  charge is rarely documentable. An unknown category or a
+  non-positive amount fails the scan, because a typo would otherwise
+  filter nothing. See `config/hsa_scanner.example.json` for the
+  structure.
 
 ## Cross-document deduplication
 

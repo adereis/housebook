@@ -7,7 +7,7 @@ stub entries in hsa_expenses so the user can collect receipts.
 import json
 import os
 import sqlite3
-from typing import List
+from dataclasses import dataclass, field
 
 from housebook.config.settings import DB_PATH, HSA_SCANNER_JSON
 from housebook.hsa.providers import ProviderResolver
@@ -95,23 +95,75 @@ def _category_from_description(description: str) -> str:
     return "medical"
 
 
+# Every value `_category_from_description` can return.
+SCAN_CATEGORIES = frozenset({
+    "dental", "vision", "pharmacy", "mental_health", "lab", "medical",
+})
+
+
+def _category_minimums(config: dict) -> dict[str, float]:
+    """The workspace's `min_amount_by_category`, validated.
+
+    The code supplies the mechanism; which categories carry a minimum,
+    and how high, is each workspace's policy. A misspelled category
+    would match nothing and silently keep every small charge, so an
+    unknown category or a non-positive amount raises ValueError.
+    """
+    raw = config.get("min_amount_by_category", {})
+    if not isinstance(raw, dict):
+        raise ValueError(
+            "min_amount_by_category must map a category to an amount"
+        )
+    minimums = {}
+    for category, amount in raw.items():
+        if category not in SCAN_CATEGORIES:
+            raise ValueError(
+                f"min_amount_by_category: unknown category {category!r}; "
+                f"expected one of {', '.join(sorted(SCAN_CATEGORIES))}"
+            )
+        if (
+            isinstance(amount, bool)
+            or not isinstance(amount, (int, float))
+            or amount <= 0
+        ):
+            raise ValueError(
+                f"min_amount_by_category: {category!r} needs a positive "
+                f"amount, got {amount!r}"
+            )
+        minimums[category] = float(amount)
+    return minimums
+
+
+@dataclass
+class ScanResult:
+    """Stubs a scan created (or would create), and charges it held back.
+
+    `below_minimum` lists charges that a category minimum kept out.
+    They are never linked to an expense, so every later scan finds
+    them again; callers report them rather than drop them unseen.
+    """
+
+    stubs: list[dict] = field(default_factory=list)
+    below_minimum: list[dict] = field(default_factory=list)
+
+
 def scan_cc_transactions(
     db_path: str = None,
     dry_run: bool = False,
     resolver: ProviderResolver = None,
-) -> List[dict]:
-    """Find medical transactions and create HSA stubs.
-
-    Returns a list of dicts describing created (or would-create) stubs.
-    """
-    conn = sqlite3.connect(db_path or DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.row_factory = sqlite3.Row
-
+) -> ScanResult:
+    """Find medical transactions and create HSA stubs."""
+    # Validate the config before opening the database, so a bad
+    # minimum fails without leaving a connection behind.
     config = _load_scanner_config()
     exclusion_patterns = [str(p) for p in config.get("exclusion_patterns", [])]
     excl_sql, excl_params = _build_exclusion_sql(exclusion_patterns)
     medical_keywords = _medical_keywords(config)
+    minimums = _category_minimums(config)
+
+    conn = sqlite3.connect(db_path or DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.row_factory = sqlite3.Row
 
     # Find transactions in medical categories that don't already
     # have an HSA stub
@@ -174,7 +226,8 @@ def scan_cc_transactions(
 
     if resolver is None:
         resolver = ProviderResolver()
-    stubs = []
+    result = ScanResult()
+    stubs = result.stubs
     for r in all_rows:
         hsa_category = _category_from_description(
             r["description"]
@@ -189,6 +242,10 @@ def scan_cc_transactions(
             "cc_category": r["category"],
             "source_card": r["source"],
         }
+        minimum = minimums.get(hsa_category)
+        if minimum is not None and stub["amount"] < minimum:
+            result.below_minimum.append({**stub, "minimum": minimum})
+            continue
         stubs.append(stub)
 
         if not dry_run:
@@ -225,4 +282,4 @@ def scan_cc_transactions(
         conn.commit()
 
     conn.close()
-    return stubs
+    return result

@@ -10,5 +10,8 @@
         "hair",
         "salon",
         "barber"
-    ]
+    ],
+    "min_amount_by_category": {
+        "pharmacy": 15
+    }
 }

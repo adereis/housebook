@@ -402,8 +402,18 @@ class TestHsaScanner(unittest.TestCase):
         self.db_fd, self.db_path = tempfile.mkstemp()
         _create_hsa_schema(self.db_path)
         self._seed_transactions()
+        # Pin the scanner config to "none" so a workspace's exclusion
+        # patterns or category minimums can never change these results.
+        self._config_dir = tempfile.TemporaryDirectory()
+        self._config_patch = patch(
+            "housebook.hsa.scanner.HSA_SCANNER_JSON",
+            os.path.join(self._config_dir.name, "absent.json"),
+        )
+        self._config_patch.start()
 
     def tearDown(self):
+        self._config_patch.stop()
+        self._config_dir.cleanup()
         os.close(self.db_fd)
         os.unlink(self.db_path)
 
@@ -481,7 +491,7 @@ class TestHsaScanner(unittest.TestCase):
         stubs = scan_cc_transactions(
             db_path=self.db_path,
             dry_run=True,
-        )
+        ).stubs
         self.assertEqual(len(stubs), 2)
         providers = {s["provider"] for s in stubs}
         self.assertIn("RIVERSIDE HOSPITAL", providers)
@@ -491,7 +501,7 @@ class TestHsaScanner(unittest.TestCase):
         stubs = scan_cc_transactions(
             db_path=self.db_path,
             dry_run=False,
-        )
+        ).stubs
         self.assertEqual(len(stubs), 2)
 
         conn = sqlite3.connect(self.db_path)
@@ -507,7 +517,7 @@ class TestHsaScanner(unittest.TestCase):
         stubs2 = scan_cc_transactions(
             db_path=self.db_path,
             dry_run=False,
-        )
+        ).stubs
         self.assertEqual(len(stubs2), 0)
 
         conn = sqlite3.connect(self.db_path)
@@ -519,7 +529,7 @@ class TestHsaScanner(unittest.TestCase):
         stubs = scan_cc_transactions(
             db_path=self.db_path,
             dry_run=True,
-        )
+        ).stubs
         amounts = [s["amount"] for s in stubs]
         self.assertTrue(all(a > 0 for a in amounts))
 
@@ -527,7 +537,7 @@ class TestHsaScanner(unittest.TestCase):
         stubs = scan_cc_transactions(
             db_path=self.db_path,
             dry_run=True,
-        )
+        ).stubs
         by_provider = {s["provider"]: s for s in stubs}
         self.assertEqual(
             by_provider["CVS/PHARMACY #1234"]["category"],
@@ -564,7 +574,7 @@ class TestHsaScanner(unittest.TestCase):
         stubs = scan_cc_transactions(
             db_path=self.db_path,
             dry_run=True,
-        )
+        ).stubs
         providers = {s["provider"] for s in stubs}
         self.assertIn("DENTAL ASSOCIATES", providers)
 
@@ -593,7 +603,7 @@ class TestHsaScanner(unittest.TestCase):
         stubs = scan_cc_transactions(
             db_path=self.db_path,
             dry_run=True,
-        )
+        ).stubs
         providers = {s["provider"] for s in stubs}
         self.assertNotIn("First Aid Kit", providers)
 
@@ -627,7 +637,7 @@ class TestHsaScanner(unittest.TestCase):
             ):
                 stubs = scan_cc_transactions(
                     db_path=self.db_path, dry_run=True,
-                )
+                ).stubs
                 self.assertNotIn(
                     "LAKESIDE HEALTHCARE", {s["provider"] for s in stubs},
                 )
@@ -636,10 +646,121 @@ class TestHsaScanner(unittest.TestCase):
                     json.dump({"medical_keywords": ["Lakeside Health"]}, f)
                 stubs = scan_cc_transactions(
                     db_path=self.db_path, dry_run=True,
-                )
+                ).stubs
                 self.assertIn(
                     "LAKESIDE HEALTHCARE", {s["provider"] for s in stubs},
                 )
+
+    def _scan_with_config(self, config, dry_run=True):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = os.path.join(tmp, "scanner.json")
+            with open(config_path, "w") as f:
+                json.dump(config, f)
+            with patch(
+                "housebook.hsa.scanner.HSA_SCANNER_JSON", config_path,
+            ):
+                return scan_cc_transactions(
+                    db_path=self.db_path, dry_run=dry_run,
+                )
+
+    def _stub_count(self):
+        conn = sqlite3.connect(self.db_path)
+        count = conn.execute("SELECT COUNT(*) FROM hsa_expenses").fetchone()[0]
+        conn.close()
+        return count
+
+    def test_scan_category_minimum_holds_back_small_charges(self):
+        """A charge under its category's minimum is reported, not
+        stubbed, and stays unlinked so the next scan reports it again."""
+        config = {"min_amount_by_category": {"pharmacy": 30}}
+        result = self._scan_with_config(config, dry_run=False)
+
+        self.assertEqual(
+            [s["provider"] for s in result.stubs], ["RIVERSIDE HOSPITAL"],
+        )
+        self.assertEqual(len(result.below_minimum), 1)
+        held = result.below_minimum[0]
+        self.assertEqual(held["provider"], "CVS/PHARMACY #1234")
+        self.assertEqual(held["minimum"], 30.0)
+        self.assertEqual(self._stub_count(), 1)
+
+        again = self._scan_with_config(config, dry_run=False)
+        self.assertEqual(again.stubs, [])
+        self.assertEqual(
+            [s["provider"] for s in again.below_minimum],
+            ["CVS/PHARMACY #1234"],
+        )
+
+    def test_scan_category_minimum_is_scoped_and_inclusive(self):
+        """A minimum binds only its own category, and a charge equal
+        to the minimum still becomes a stub."""
+        result = self._scan_with_config(
+            {"min_amount_by_category": {"pharmacy": 200}},
+        )
+        self.assertIn(
+            "RIVERSIDE HOSPITAL", {s["provider"] for s in result.stubs},
+        )
+
+        result = self._scan_with_config(
+            {"min_amount_by_category": {"pharmacy": 27}},
+        )
+        self.assertIn(
+            "CVS/PHARMACY #1234", {s["provider"] for s in result.stubs},
+        )
+        self.assertEqual(result.below_minimum, [])
+
+    def test_scan_category_minimum_rejects_bad_config(self):
+        """A misspelled category or a non-positive amount would
+        silently keep every small charge, so it fails loudly."""
+        for bad in (
+            {"pharmcy": 30},
+            {"pharmacy": 0},
+            {"pharmacy": "30"},
+            {"pharmacy": True},
+            ["pharmacy", 30],
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    self._scan_with_config(
+                        {"min_amount_by_category": bad}, dry_run=False,
+                    )
+        self.assertEqual(self._stub_count(), 0)
+
+    def test_scan_cli_reports_held_back_charges(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from housebook.hsa.cli import cmd_scan
+
+        def run(json_output):
+            args = type(
+                "Args",
+                (),
+                {
+                    "db_path": self.db_path,
+                    "dry_run": True,
+                    "json_output": json_output,
+                },
+            )()
+            f = io.StringIO()
+            with tempfile.TemporaryDirectory() as tmp:
+                config_path = os.path.join(tmp, "scanner.json")
+                with open(config_path, "w") as cfg:
+                    json.dump({"min_amount_by_category": {"pharmacy": 30}}, cfg)
+                with patch(
+                    "housebook.hsa.scanner.HSA_SCANNER_JSON", config_path,
+                ), redirect_stdout(f):
+                    cmd_scan(args)
+            return f.getvalue()
+
+        output = json.loads(run(json_output=True))
+        self.assertEqual(len(output["stubs"]), 1)
+        self.assertEqual(
+            output["below_minimum"][0]["provider"], "CVS/PHARMACY #1234",
+        )
+
+        text = run(json_output=False)
+        self.assertIn("Held back 1 pharmacy charge(s) under $30.00", text)
 
 
 class TestHsaCli(unittest.TestCase):
