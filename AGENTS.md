@@ -11,13 +11,14 @@ When acting as an AI assistant on this repository, **you must follow this SOP:**
 > task clearly requires bringing in new remote data. When in doubt, ask first.
 
 1. **Initialization:** Whenever the user asks to process new files, run the pipeline, or update data, verify that `HOUSEBOOK_WORKSPACE_DIR` is set in the `.env` file and that the directory exists locally.
-2. **Pre-Flight Check (Status only):** Run `housebook-sync status` to view the sync dashboard — it shows database change counters (local/anchor/remote), pending push/pull file counts, recent sync history with machine names, and a safety recommendation. Only proceed to pull if (a) the user explicitly requested a sync, or (b) there is a clear reason to believe the remote has newer data needed for the current task.
-3. **Pulling safely:** `housebook-sync pull` uses `rclone sync` to propagate remote renames and deletions. `data/backups/` is protected via pull excludes. Do not pull unless there is a concrete reason.
+2. **Pre-Flight Check (Status only):** Run `housebook-sync status` to view the sync dashboard — it shows database change counters (local/anchor/remote), the files changed on each side since this machine's last sync (`--verbose` lists them, renames paired), recent sync history with machine names, and a safety recommendation. Only proceed to pull if (a) the user explicitly requested a sync, or (b) there is a clear reason to believe the remote has newer data needed for the current task.
+3. **Pulling safely:** `housebook-sync pull` applies only the remote's changes (additions, edits, renames, deletions) and never touches this machine's own. Any file it replaces or deletes here moves to `data/backups/displaced-<time>/`. It refuses when the same file or the DB changed on both sides. `data/backups/` is never pulled. Do not pull unless there is a concrete reason.
 4. **Import:** The user provides file path(s) from any location. Follow the unified import SOP (`prompts/import.md`) to determine the source type, rename, create sidecars, and move files to `$WORKSPACE/<source>/YYYY/`. For Amazon zip exports, use `housebook-amazon import <path-to-zip> --profile <name>`. After import + user review, run `housebook-<source> ingest`.
-5. **Safety Check (Dry Run):** After successful execution, run `housebook-sync push --dry-run` and read the output.
+5. **Safety Check (Dry Run):** After successful execution, run `housebook-sync push --dry-run` and read the output. It marks each of this machine's changes `+` added, `~` modified, `-` deleted, or `>` renamed (old name → new name, sidecars paired with their documents). It lists separately any deletion whose content exists nowhere here.
 6. **Conflict Resolution & Push:**
-    - If the push will only update the SQLite database, JSON configs, and generated PDFs/reports: run `housebook-sync push` autonomously.
-    - If the push intends to **delete** historical raw data or overwrite a file you suspect the user just modified elsewhere: **STOP and ask the user for permission** to proceed with the push.
+    - If the push will only update the SQLite database, JSON configs, and generated PDFs/reports, or rename or trash raw documents: run `housebook-sync push` autonomously.
+    - If the dry run lists deletions that need confirmation (content that exists nowhere here): **STOP and ask the user**. Only after they confirm, re-run with `--allow-deletions`. A non-interactive push refuses those deletions by itself.
+    - If a sync **refuses** (the same file or the DB changed on both sides, or this machine has no anchor yet): **STOP and ask**. Never reach for `--force` on your own; it discards one side's version.
 
 ## Agent Workflow: Import → Ingest → Audit → Push
 
@@ -75,16 +76,66 @@ housebook-audit add-manual "Workmanship" --amount 9500 \
 housebook-audit edit-project <id> --budget N --start … --end …   # Amend a project
 housebook-audit projects                        # Open projects: spend vs budget
 
-# 5. Sync back to Drive
+# 5. Sync back to Drive (merges; stops on a same-file conflict)
 housebook-sync
 ```
 
-`housebook-sync` with no arguments does bidirectional sync: pulls new
-inputs from remote, then pushes local DB changes. It uses SQLite's
-file header change counter for conflict detection — if the remote DB
-was modified since your last sync, it aborts with a clear error
-showing which machine last pushed and when (from the sync journal).
-Use `housebook-sync pull` / `housebook-sync push` for manual control.
+`housebook-sync` with no arguments pulls the remote's changes, then
+pushes this machine's. It stops only when the same file, or the DB,
+changed on both sides. Use `housebook-sync pull` / `housebook-sync
+push` for one direction.
+
+**Why each side's changes are tracked.** A plain mirror (`rclone
+sync`) treats a file only the destination has as junk to delete. That
+is true whether it is a statement imported here an hour ago or one
+another machine removed last week. Before 2026-10 a pull mirrored the
+remote, so it deleted every not-yet-pushed import. Each machine now
+keeps two anchors from its last sync, and neither is synced:
+
+- **DB anchor** (`data/finance.sync_anchor`): SQLite's file header
+  change counter, compared with the local and remote counters.
+- **File anchor** (`data/finance.sync_manifest`): the size, mtime and
+  MD5 of every other synced file. MD5 decides where both sides have
+  one. Size + mtime stand in otherwise, so an `rclone crypt` remote
+  (which has no MD5) still works.
+
+Comparing both sides with the anchors pins each difference on the
+side that made it. A pull copies only what the remote changed, and a
+push sends only what this machine changed. Each touches only the paths
+it planned, so neither can undo the other side's work. For example, a
+file another machine adds while this one pushes is left alone. A
+refusal lists the files and names the machine that last pushed (from
+the sync journal).
+
+The safety rails:
+
+- Every pull moves the files it replaces or deletes into
+  `data/backups/displaced-<time>/`, because rclone's local deletions
+  are permanent. Delete those folders once reviewed.
+- A push asks before deleting remote content that exists nowhere
+  here. A rename, a move to `_trash/`, or a duplicate never asks.
+  Non-interactive runs refuse unless given `--allow-deletions`.
+- Backups reach the remote by additive copy only, and are never
+  pulled. So one machine's push cannot delete another's backups. Local
+  rotation does not propagate either, so prune the remote's
+  `data/backups/` by hand now and then.
+- `--force` mirrors one side over the other and needs a direction.
+  `push --force` makes the remote match this machine, and `pull
+  --force` makes this machine match the remote (its own versions
+  displaced). It settles conflicts, and it never doubles as
+  `--allow-deletions`.
+
+A machine without a manifest for the remote (first run, or a new
+remote) cannot tell its own additions from stale copies. A file only
+one side has may be new there or deleted on the other, and merging
+would resurrect the deletions. So it refuses until one `--force` run
+picks a side, and from then on it is anchored. An empty side (a fresh
+machine, a new remote) needs no choice.
+
+The design is shared with `../brtax-us`'s `brtax-sync`. The two
+`sync.py` modules differ only in their header (imports, program and
+variable names) and the `datetime.UTC` alias, so port any sync fix to
+both.
 
 **The workspace has no default.** Every command exits unless
 `HOUSEBOOK_WORKSPACE_DIR` names an existing directory
@@ -102,8 +153,9 @@ every workspace subtree (`/cc/`, `/hsa/`, `/tax/`, `/amazon/`,
 
 Each sync operation is recorded in a **sync journal**
 (`data/finance.sync_journal`) that tracks timestamp, direction,
-machine hostname, and file count. The journal is synced to remote,
-so `housebook-sync status` on any machine shows cross-machine history.
+machine hostname, and file count. Every sync merges it with the
+remote's copy (never overwrites it), so `housebook-sync status` on any
+machine shows cross-machine history.
 
 The `housebook-audit` CLI enforces the transaction status lifecycle
 automatically: `verify` sets `AGENT_VERIFIED` and clears `needs_review`.
