@@ -1007,6 +1007,44 @@ class TestHsaCli(unittest.TestCase):
         self.assertEqual(len(flagged), 1)
         self.assertEqual(flagged[0]["severity"], "warning")
 
+    def test_check_missing_documents_ignores_deleted(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from housebook.hsa.cli import cmd_check
+
+        # A merge moves the documents to the surviving row, so a
+        # soft-deleted expense with none is expected, not a defect.
+        conn = sqlite3.connect(self.db_path)
+        for status in ("UNREIMBURSED", "DELETED"):
+            conn.execute(
+                "INSERT INTO hsa_expenses "
+                "(service_date, provider, patient, patient_responsibility, "
+                "category, source, status) "
+                "VALUES ('2025-05-01', 'Maple Dental', 'sterling', 40.0, "
+                "'dental', 'eob', ?)",
+                (status,),
+            )
+        conn.commit()
+        live_id, deleted_id = conn.execute(
+            "SELECT MAX(id) - 1, MAX(id) FROM hsa_expenses"
+        ).fetchone()
+        conn.close()
+
+        args = type("Args", (), {
+            "db_path": self.db_path, "json_output": True,
+            "verify_hashes": False,
+        })()
+        f = io.StringIO()
+        with redirect_stdout(f):
+            cmd_check(args)
+        flagged = " ".join(
+            i["message"] for i in json.loads(f.getvalue())["issues"]
+            if i["type"] == "missing_document"
+        )
+        self.assertIn(f"id={live_id} ", flagged)
+        self.assertNotIn(f"id={deleted_id} ", flagged)
+
     def test_summary_json_output(self):
         import io
         from contextlib import redirect_stdout
@@ -1451,6 +1489,38 @@ class TestHsaSidecarIngestion(unittest.TestCase):
         self.assertEqual(second["ingested"], 0)
         self.assertEqual(second["skipped"], 2)
         self.assertEqual(second["expenses"], 0)
+
+    def test_ingest_directory_skips_trash(self):
+        # A sidecar moved to _trash/ (a duplicate download, say) is
+        # retired, not pending: validate_directory already skips it,
+        # and ingest must too, or the trashed copy comes back as a
+        # second document.
+        ing = self._make_ingestor()
+        meta = {"date": "2025-03-15", "entity": "Maple-Dental",
+                "doc_type": "REC", "patient": "Sterling",
+                "amount": 60.71, "tags": []}
+        self._write_sidecar("2025-03-15__Maple-Dental__REC__Sterling__60.71", meta)
+        os.makedirs(os.path.join(self.tmpdir, "_trash", "2025"))
+        self._write_sidecar(
+            "_trash/2025/2025-03-15__Maple-Dental__REC__Sterling__60.71", meta,
+        )
+
+        result = ing.ingest_directory(self.tmpdir)
+
+        self.assertEqual(result["ingested"], 1)
+        self.assertEqual(result["errors"], [])
+        conn = sqlite3.connect(self.db_path)
+        self.assertEqual(
+            conn.execute("SELECT COUNT(*) FROM hsa_documents").fetchone()[0], 1,
+        )
+        self.assertEqual(
+            conn.execute(
+                "SELECT COUNT(*) FROM processed_files "
+                "WHERE file_path LIKE '%_trash%'"
+            ).fetchone()[0],
+            0,
+        )
+        conn.close()
 
     def test_ingest_eob_with_financials(self):
         ing = self._make_ingestor()

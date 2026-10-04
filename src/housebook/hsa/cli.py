@@ -350,12 +350,14 @@ def cmd_check(args):
                 }
             )
 
-    # Expenses with no documents
+    # Expenses with no documents. A merge moves documents to the
+    # surviving row, so a deleted expense with none is expected.
     no_docs = conn.execute("""
         SELECT e.id, e.service_date, e.provider, e.source
         FROM hsa_expenses e
         LEFT JOIN hsa_documents d ON d.expense_id = e.id
         WHERE d.id IS NULL AND e.source != 'cc_stub'
+          AND e.status != 'DELETED'
     """).fetchall()
 
     for n in no_docs:

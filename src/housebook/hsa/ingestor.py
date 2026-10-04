@@ -326,7 +326,9 @@ class HsaIngestor(Ingestor):
         Keys: ingested (files that did new work), skipped (files
         already processed), expenses (new hsa_expenses rows created),
         errors (list of (path, message)). The Reimbursements/ subtree
-        is excluded, matching the prior CLI walk.
+        is excluded, matching the prior CLI walk, and so is `_trash/`
+        at any depth, matching validate_directory: a trashed sidecar
+        is retired, and ingesting it would re-add its document.
         """
         result = {
             "ingested": 0,
@@ -338,6 +340,8 @@ class HsaIngestor(Ingestor):
             rel = os.path.relpath(root, hsa_dir)
             head = rel.split(os.sep)[0] if rel != "." else ""
             if head == "Reimbursements":
+                continue
+            if "_trash" in rel.split(os.sep):
                 continue
             for name in sorted(files):
                 if not name.endswith(".json"):

@@ -99,6 +99,11 @@ sidecars — and sidecars whose envelope fails validation — are
 flagged as errors. Run the import SOP (`prompts/hsa/import.md`)
 first.
 
+Both the ingest walk and that validation skip `Reimbursements/` and
+any `_trash/` directory. To retire a file, such as a duplicate
+download of a claim already on file, move it and its sidecar to
+`hsa/_trash/` and remove its `hsa_documents` row.
+
 ## Agent workflow for HSA
 
 The HSA workflow has **two distinct phases separated by a human
