@@ -1419,6 +1419,56 @@ def cmd_edit_project(args):
         print(f"Updated project [{args.project_id}]: {', '.join(changed)}")
 
 
+def cmd_edit_trip(args):
+    """Amend an existing trip — only the fields you pass are changed.
+
+    Moving a trip's dates never moves transactions on or off it:
+    membership is the explicit trip_id, set by `verify`/`assign`.
+    """
+    conn = _connect(args.db_path)
+    cur = conn.cursor()
+    trip = cur.execute(
+        "SELECT start_date, end_date FROM trips WHERE id = ?",
+        (args.trip_id,),
+    ).fetchone()
+    if trip is None:
+        print(f"Error: no trip with id {args.trip_id}")
+        conn.close()
+        sys.exit(1)
+
+    fields, params = [], []
+    for col, val in (("name", args.name), ("start_date", args.start),
+                     ("end_date", args.end), ("type", args.type),
+                     ("location", args.location)):
+        if val is not None:
+            fields.append(f"{col} = ?")
+            params.append(val)
+    if not fields:
+        print("Error: nothing to update — pass at least one field "
+              "(--name/--start/--end/--type/--location).")
+        conn.close()
+        sys.exit(1)
+
+    start = args.start or trip["start_date"]
+    end = args.end or trip["end_date"]
+    if start and end and start > end:
+        print(f"Error: start {start} is after end {end}.")
+        conn.close()
+        sys.exit(1)
+
+    _backup(args.db_path)
+    params.append(args.trip_id)
+    cur.execute(f"UPDATE trips SET {', '.join(fields)} WHERE id = ?", params)
+    conn.commit()
+    conn.close()
+
+    changed = [f.split(" =")[0] for f in fields]
+    if args.json_output:
+        print(json.dumps({"id": args.trip_id, "updated_fields": changed}))
+    else:
+        print(f"Updated trip [{args.trip_id}]: {', '.join(changed)}")
+
+
 # ── main ─────────────────────────────────────────────────────────
 
 def main():
@@ -1430,6 +1480,7 @@ def main():
   calibrate     Show verified category distribution
   trips         List trips for assignment context
   create-trip   Create a new trip record
+  edit-trip     Amend a trip's name/dates/type/location
   verify        Batch-verify transactions (audit + optional assign)
   assign        Tag transactions with a project/trip (status unchanged)
   link          Link a purchase to its refund/cancellation
@@ -1531,6 +1582,16 @@ examples:
         help="Trip type (default: personal)",
     )
     p_ct.add_argument("--location", default=None, help="Trip location")
+
+    # edit-trip
+    p_et = sub.add_parser("edit-trip", parents=[common],
+                          help="Amend an existing trip's fields")
+    p_et.add_argument("trip_id", type=int, help="Trip ID")
+    p_et.add_argument("--name", default=None)
+    p_et.add_argument("--start", default=None, help="Start date YYYY-MM-DD")
+    p_et.add_argument("--end", default=None, help="End date YYYY-MM-DD")
+    p_et.add_argument("--type", default=None, choices=["personal", "work"])
+    p_et.add_argument("--location", default=None)
 
     # verify
     p_verify = sub.add_parser("verify", parents=[common],
@@ -1726,6 +1787,7 @@ examples:
         "calibrate": cmd_calibrate,
         "trips": cmd_trips,
         "create-trip": cmd_create_trip,
+        "edit-trip": cmd_edit_trip,
         "verify": cmd_verify,
         "link": cmd_link,
         "link-amazon-refunds": cmd_link_amazon_refunds,

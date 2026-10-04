@@ -55,6 +55,7 @@ housebook-audit pending --json               # Machine-readable with metadata
 housebook-audit trips                        # Check trips for assignment
 housebook-audit create-trip "Name" --start YYYY-MM-DD --end YYYY-MM-DD \
     --type personal --location "Place"       # Create trip if needed
+housebook-audit edit-trip <id> --start YYYY-MM-DD   # Amend a trip (only fields passed)
 housebook-audit verify <ids> --category "X"  # Batch-verify transactions
 housebook-audit verify <ids> --trip <id>     # Assign to trip
 housebook-audit add-manual "Cash tip" --amount 20 \

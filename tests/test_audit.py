@@ -18,6 +18,7 @@ from housebook.audit import (
     cmd_create_trip,
     cmd_detect_trips,
     cmd_edit_project,
+    cmd_edit_trip,
     cmd_link,
     cmd_link_amazon_refunds,
     cmd_linked,
@@ -149,9 +150,9 @@ class _Args:
         self.force = False
         self.trip = None
         self.project = None
-        # edit-project optional fields (default None = "leave unchanged")
+        # edit-project/edit-trip optional fields (None = "leave unchanged")
         for attr in ("name", "start", "end", "location", "description",
-                     "budget", "status", "keywords", "categories"):
+                     "budget", "status", "keywords", "categories", "type"):
             setattr(self, attr, None)
         for k, v in kwargs.items():
             setattr(self, k, v)
@@ -312,6 +313,65 @@ class TestCmdCreateTrip(unittest.TestCase):
         ).fetchone()
         conn.close()
         self.assertIsNotNone(row)
+
+
+class TestCmdEditTrip(unittest.TestCase):
+
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        _create_test_db(self.db_path)
+        _seed_trips(self.db_path, [
+            ("Ledger Lisbon", "2025-07-08", "2025-07-20",
+             "personal", "Lisbon"),
+        ])
+
+    def tearDown(self):
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    def _trip(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        row = dict(conn.execute("SELECT * FROM trips").fetchone())
+        conn.close()
+        return row
+
+    def _edit(self, **fields):
+        with patch("builtins.print"):
+            cmd_edit_trip(_Args(trip_id=1, db_path=self.db_path, **fields))
+
+    def test_changes_only_the_fields_passed(self):
+        """One traveler arriving a week early widens the trip; the
+        rest of it stays as it was."""
+        self._edit(start="2025-07-01")
+        trip = self._trip()
+        self.assertEqual(trip["start_date"], "2025-07-01")
+        self.assertEqual(trip["end_date"], "2025-07-20")
+        self.assertEqual(trip["location"], "Lisbon")
+
+    def test_sets_name_type_and_location(self):
+        self._edit(name="Ledger Portugal", type="work",
+                   location="Lisbon & Porto, Portugal")
+        trip = self._trip()
+        self.assertEqual(
+            (trip["name"], trip["type"], trip["location"]),
+            ("Ledger Portugal", "work", "Lisbon & Porto, Portugal"),
+        )
+
+    def test_rejects_start_after_end(self):
+        with patch("builtins.print"), self.assertRaises(SystemExit):
+            cmd_edit_trip(_Args(trip_id=1, db_path=self.db_path,
+                                start="2025-07-25"))
+        self.assertEqual(self._trip()["start_date"], "2025-07-08")
+
+    def test_rejects_nothing_to_update(self):
+        with patch("builtins.print"), self.assertRaises(SystemExit):
+            cmd_edit_trip(_Args(trip_id=1, db_path=self.db_path))
+
+    def test_rejects_unknown_trip(self):
+        with patch("builtins.print"), self.assertRaises(SystemExit):
+            cmd_edit_trip(_Args(trip_id=99, db_path=self.db_path,
+                                name="x"))
 
 
 class TestCmdVerify(unittest.TestCase):
