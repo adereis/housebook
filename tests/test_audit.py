@@ -1397,3 +1397,48 @@ class TestBackupIsolation(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestCmdApplyRulesMatcher(unittest.TestCase):
+    """`apply-rules` uses the ingest matcher: the longest keyword wins.
+
+    Regression: it took the first match in rules.json order, so a
+    generic "AMAZON" listed early beat every specific keyword below it,
+    and ingest and audit could suggest different categories for the
+    same description.
+    """
+
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        self.addCleanup(os.unlink, self.db_path)
+        self.addCleanup(os.close, self.db_fd)
+        _create_test_db(self.db_path)
+        recent = (date.today() - timedelta(days=10)).isoformat()
+        _seed_transactions(self.db_path, [
+            (recent, "Amazon: Maple Fish Oil 1000mg", 18.0,
+             "Shopping & Retail", "Amazon", "UNVERIFIED", 1),
+            (recent, "LEDGER OBSCURE VENDOR", 7.0, "Uncategorized",
+             "Amex", "UNVERIFIED", 1),
+        ])
+        rules_fd, self.rules_path = tempfile.mkstemp(suffix=".json")
+        self.addCleanup(os.unlink, self.rules_path)
+        with os.fdopen(rules_fd, "w") as f:
+            json.dump({"Shopping & Retail": ["AMAZON"],
+                       "Wellness": ["FISH OIL"]}, f)
+
+    def test_specific_keyword_beats_earlier_generic_one(self):
+        with patch("housebook.audit.DB_PATH", self.db_path), \
+             patch("housebook.config.settings.RULES_JSON",
+                   self.rules_path), \
+             patch("housebook.audit.backup_database",
+                   return_value=None), \
+             patch("builtins.print"):
+            cmd_apply_rules(_Args(db_path=self.db_path))
+        conn = sqlite3.connect(self.db_path)
+        cats = dict(conn.execute(
+            "SELECT description, category FROM transactions",
+        ).fetchall())
+        conn.close()
+        self.assertEqual(cats["Amazon: Maple Fish Oil 1000mg"], "Wellness")
+        # No rule matched: left alone, not overwritten with a guess.
+        self.assertEqual(cats["LEDGER OBSCURE VENDOR"], "Uncategorized")

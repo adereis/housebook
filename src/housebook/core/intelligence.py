@@ -6,7 +6,7 @@ from typing import Dict, List, Union
 
 from housebook.config.settings import EXCLUSIONS_JSON, HEURISTICS_JSON
 
-from .models import CATEGORY_CC_PAYMENT, CATEGORY_TRANSFERS_REFUNDS, CategorizationRule
+from .models import CATEGORY_CC_PAYMENT, CATEGORY_TRANSFERS_REFUNDS
 
 CC_PAYMENT_PATTERNS = [
     r"(?i)\bpayment[:\s]*thank\s+you\b",
@@ -16,9 +16,28 @@ CC_PAYMENT_PATTERNS = [
 ]
 
 
+def load_rules(path: str) -> Dict[str, List[str]]:
+    """Read the category → keywords map from the workspace rules.json.
+
+    rules.json is the only rule store: ingest and `apply-rules` both
+    read it, and it also lists the categories the dashboard offers.
+    A DB copy of the rules, seeded once and edited separately, used to
+    drift from it.
+    """
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"{path} not found; run housebook-init-db to create it "
+            f"from the template"
+        )
+    with open(path, "r") as f:
+        return json.load(f)
+
+
 class Intelligence:
-    def __init__(self, rules: List[CategorizationRule]):
-        self.rules = rules
+    """Suggest a category for a description; used at ingest and by
+    `housebook-audit apply-rules`, so both always agree."""
+
+    def __init__(self, rules: Dict[str, List[str]]):
         self.rules_by_category = self._organize_rules(rules)
 
         # Load externalized configurations
@@ -33,10 +52,15 @@ class Intelligence:
                 return json.load(f)
         return default
 
-    def _organize_rules(self, rules: List[CategorizationRule]) -> List[Dict]:
-        # Flatten rules into a list of (keyword, category) and sort by length descending
+    def _organize_rules(self, rules: Dict[str, List[str]]) -> List[Dict]:
+        # The longest matching keyword wins, whichever category it is
+        # in, so a specific keyword ("fish oil") beats a generic one
+        # ("amazon") without any care for file order. sorted() is
+        # stable, so keywords of equal length keep their file order.
         flat_rules = [
-            {"keyword": r.keyword.lower(), "category": r.category} for r in rules
+            {"keyword": kw.lower(), "category": cat}
+            for cat, keywords in rules.items()
+            for kw in keywords
         ]
         return sorted(flat_rules, key=lambda x: len(x["keyword"]), reverse=True)
 

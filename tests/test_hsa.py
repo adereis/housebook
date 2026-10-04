@@ -1178,11 +1178,6 @@ class TestHsaAppEndpoints(unittest.TestCase):
             type TEXT DEFAULT 'unknown', location TEXT
         )""")
         conn.execute("""CREATE TABLE IF NOT EXISTS
-            categorization_rules (
-            category TEXT, keyword TEXT,
-            UNIQUE(category, keyword)
-        )""")
-        conn.execute("""CREATE TABLE IF NOT EXISTS
             manual_expenses (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             description TEXT, amount REAL, category TEXT,

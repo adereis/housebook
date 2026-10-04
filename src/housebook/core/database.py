@@ -9,7 +9,7 @@ from decimal import Decimal
 from glob import glob
 from typing import Iterator, List
 
-from .models import CategorizationRule, Transaction
+from .models import Transaction
 
 
 def _decimal_to_str(d):
@@ -236,16 +236,6 @@ class Database:
                 f"than this tool expects ({EXPECTED_SCHEMA_VERSION}). "
                 f"Update the tool before operating on this database."
             )
-
-    def get_rules(self) -> List[CategorizationRule]:
-        conn = self._get_connection()
-        c = conn.cursor()
-        c.execute("SELECT category, keyword FROM categorization_rules")
-        rules = [
-            CategorizationRule(category=row[0], keyword=row[1]) for row in c.fetchall()
-        ]
-        conn.close()
-        return rules
 
     def add_transaction(
         self,

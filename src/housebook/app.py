@@ -30,7 +30,7 @@ from housebook.core.dashboard import (
     load_tax_documents,
 )
 from housebook.core.database import Database, backup_database
-from housebook.core.knowledge_manager import clean_keyword
+from housebook.core.intelligence import load_rules
 from housebook.core.models import (
     CATEGORY_CC_PAYMENT,
     CATEGORY_TRANSFERS_REFUNDS,
@@ -409,8 +409,10 @@ async def stats():
     c.execute("SELECT COUNT(*) FROM ingestion_errors")
     errors = c.fetchone()[0]
 
-    c.execute("SELECT COUNT(*) FROM categorization_rules")
-    rules = c.fetchone()[0]
+    rules = (
+        sum(len(kws) for kws in load_rules(RULES_JSON).values())
+        if os.path.exists(RULES_JSON) else 0
+    )
 
     schema_ver = get_schema_version(DB_PATH)
 
@@ -659,39 +661,23 @@ async def update_category(tx_id: int, data: CategoryUpdate):
     try:
         c = conn.cursor()
 
-        row = c.execute(
-            "SELECT description, category FROM transactions WHERE id = ?",
-            (tx_id,),
-        ).fetchone()
-        if row is None:
+        if c.execute(
+            "SELECT 1 FROM transactions WHERE id = ?", (tx_id,),
+        ).fetchone() is None:
             raise HTTPException(
                 status_code=404, detail="transaction not found",
             )
 
-        # 1. Update the specific transaction
+        # The correction lives on the row (USER_VERIFIED), where the
+        # audit's precedent lookup finds it. It no longer becomes a
+        # keyword rule: those were mostly whole product names that
+        # never matched a second transaction.
         c.execute(
             "UPDATE transactions SET category = ?, "
             "needs_review = 0, status = 'USER_VERIFIED' "
             "WHERE id = ?",
             (data.category, tx_id),
         )
-
-        # 2. Record a "Learned Rule" from the cleaned description.
-        # The table's UNIQUE is (category, keyword), so INSERT OR
-        # REPLACE cannot retarget an existing keyword — recategorizing
-        # would leave both the old and new rule and let an arbitrary
-        # one win. Drop the keyword's prior rows first.
-        cleaned_kw = clean_keyword(row["description"] or "").lower()
-        if len(cleaned_kw) >= 3:
-            c.execute(
-                "DELETE FROM categorization_rules WHERE keyword = ?",
-                (cleaned_kw,),
-            )
-            c.execute(
-                "INSERT INTO categorization_rules "
-                "(category, keyword) VALUES (?, ?)",
-                (data.category, cleaned_kw),
-            )
 
         conn.commit()
     finally:

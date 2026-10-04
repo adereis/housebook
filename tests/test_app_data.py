@@ -63,10 +63,6 @@ class TestAppDataEndpoint(unittest.TestCase):
             location TEXT,
             created_by TEXT NOT NULL DEFAULT 'manual'
         )""")
-        c.execute("""CREATE TABLE IF NOT EXISTS categorization_rules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT, keyword TEXT UNIQUE
-        )""")
         c.execute("""CREATE TABLE IF NOT EXISTS ingestion_errors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             file_path TEXT, line_number INTEGER,
@@ -314,6 +310,29 @@ class TestAppDataEndpoint(unittest.TestCase):
         )
         self.assertEqual(detail.status_code, 404)
         self.assertEqual(trip.status_code, 404)
+
+    def test_category_correction_changes_only_the_row(self):
+        """A UI correction marks the row USER_VERIFIED and writes no
+        rule anywhere: the fixture has no rules table, and a learned
+        rule insert used to need one."""
+        conn = sqlite3.connect(self.db_path)
+        tx_id = conn.execute(
+            "SELECT id FROM transactions "
+            "WHERE description = 'Grocery Store'"
+        ).fetchone()[0]
+        conn.close()
+        resp = self.client.post(
+            f"/api/transactions/{tx_id}/category",
+            json={"category": "Dining & Takeout"},
+        )
+        self.assertEqual(resp.status_code, 200)
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT category, status, needs_review FROM transactions "
+            "WHERE id = ?", (tx_id,),
+        ).fetchone()
+        conn.close()
+        self.assertEqual(row, ("Dining & Takeout", "USER_VERIFIED", 0))
 
     # --- Linked transactions ---
 

@@ -2,8 +2,7 @@ import unittest
 from decimal import Decimal
 from unittest.mock import patch
 
-from housebook.core.intelligence import Intelligence
-from housebook.core.models import CategorizationRule
+from housebook.core.intelligence import Intelligence, load_rules
 
 _PATCH_TARGET = (
     "housebook.core.intelligence"
@@ -14,17 +13,11 @@ _PATCH_TARGET = (
 class TestIntelligence(unittest.TestCase):
 
     def setUp(self):
-        # Sample rules for testing
-        self.rules = [
-            CategorizationRule(
-                category="Dining & Takeout",
-                keyword="Starbucks",
-            ),
-            CategorizationRule(
-                category="Groceries",
-                keyword="Whole Foods",
-            ),
-        ]
+        # Sample rules, shaped like rules.json: category -> keywords.
+        self.rules = {
+            "Dining & Takeout": ["Starbucks"],
+            "Groceries": ["Whole Foods"],
+        }
 
         # Mock external JSON data
         self.mock_exclusions = {
@@ -93,12 +86,7 @@ class TestIntelligence(unittest.TestCase):
         with patch(_PATCH_TARGET) as mock_load:
             mock_load.side_effect = self._json_side_effect()
 
-            rules = [
-                CategorizationRule(
-                    category="Dining & Takeout",
-                    keyword="Amazon",
-                ),
-            ]
+            rules = {"Dining & Takeout": ["Amazon"]}
             intel = Intelligence(rules)
             cat, conf = intel.get_category("Amazon: Starbucks Coffee")
             self.assertEqual(cat, "Shopping & Retail")
@@ -108,12 +96,7 @@ class TestIntelligence(unittest.TestCase):
         with patch(_PATCH_TARGET) as mock_load:
             mock_load.side_effect = self._json_side_effect()
 
-            rules = [
-                CategorizationRule(
-                    category="Alcohol & Specialty",
-                    keyword="Wine",
-                ),
-            ]
+            rules = {"Alcohol & Specialty": ["Wine"]}
             intel = Intelligence(rules)
             cat, conf = intel.get_category("Mountain Spring Cat Litter")
             self.assertEqual(cat, "Miscellaneous")
@@ -130,7 +113,7 @@ class TestIntelligence(unittest.TestCase):
                 heuristics=heuristics,
             )
 
-            intel = Intelligence([])
+            intel = Intelligence({})
             cat, conf = intel.get_category("Starbucks Coffee")
             self.assertEqual(cat, "Dining & Takeout")
             self.assertEqual(conf, "heuristic")
@@ -171,6 +154,51 @@ class TestIntelligence(unittest.TestCase):
                                            amount=Decimal("-1200.00"))
             self.assertEqual(cat, "CC Payment")
             self.assertEqual(conf, "rule")
+
+    def test_longest_keyword_wins_whatever_the_file_order(self):
+        """A generic keyword listed first must not shadow a specific
+        one listed later: "Amazon" under Shopping & Retail came early
+        in the real rules.json and swallowed supplements and pet food
+        under first-match-in-file-order."""
+        rules = {
+            "Shopping & Retail": ["Amazon"],
+            "Wellness": ["Fish Oil"],
+        }
+        with patch(_PATCH_TARGET) as mock_load:
+            mock_load.side_effect = self._json_side_effect(heuristics={})
+            intel = Intelligence(rules)
+            self.assertEqual(
+                intel.get_category("Amazon: Maple Fish Oil 1000mg")[0],
+                "Wellness",
+            )
+            self.assertEqual(
+                intel.get_category("Amazon: Maple Desk Lamp")[0],
+                "Shopping & Retail",
+            )
+
+    def test_equal_length_keywords_keep_file_order(self):
+        rules = {"Groceries": ["Maple"], "Home & Garden": ["Patio"]}
+        with patch(_PATCH_TARGET) as mock_load:
+            mock_load.side_effect = self._json_side_effect(heuristics={})
+            intel = Intelligence(rules)
+            self.assertEqual(
+                intel.get_category("Maple Patio Market")[0], "Groceries",
+            )
+
+    def test_load_rules_reads_category_map(self):
+        import json
+        import os
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix=".json")
+        self.addCleanup(os.unlink, path)
+        with os.fdopen(fd, "w") as f:
+            json.dump(self.rules, f)
+        self.assertEqual(load_rules(path), self.rules)
+
+    def test_load_rules_missing_file_names_the_fix(self):
+        with self.assertRaises(FileNotFoundError) as ctx:
+            load_rules("/nonexistent/rules.json")
+        self.assertIn("housebook-init-db", str(ctx.exception))
 
 
 if __name__ == "__main__":

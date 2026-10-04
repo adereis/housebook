@@ -23,13 +23,6 @@ class Transaction:
 
 
 @dataclass
-class CategorizationRule:
-    category: str
-    keyword: str
-    id: Optional[int] = None
-
-
-@dataclass
 class TaxDocument:
     tax_year: int
     document_type: str

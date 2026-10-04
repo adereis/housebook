@@ -61,10 +61,6 @@ class TestAppTaxEndpoints(unittest.TestCase):
             location TEXT,
             created_by TEXT NOT NULL DEFAULT 'manual'
         )""")
-        c.execute("""CREATE TABLE IF NOT EXISTS categorization_rules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            category TEXT, keyword TEXT UNIQUE
-        )""")
         c.execute("""CREATE TABLE IF NOT EXISTS ingestion_errors (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             file_path TEXT, line_number INTEGER,

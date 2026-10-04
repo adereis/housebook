@@ -46,7 +46,6 @@ class TestMigrationRunner(unittest.TestCase):
         expected = {
             "transactions",
             "processed_files",
-            "categorization_rules",
             "trips",
             "tax_documents",
             "ingestion_errors",
@@ -56,6 +55,17 @@ class TestMigrationRunner(unittest.TestCase):
             expected.issubset(tables),
             f"Missing tables: {expected - tables}",
         )
+
+    def test_rules_table_is_retired(self):
+        """rules.json is the only rule store; the DB copy is dropped."""
+        run_migrations(self.db_path, verbose=False)
+        conn = sqlite3.connect(self.db_path)
+        found = conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE name = 'categorization_rules'"
+        ).fetchall()
+        conn.close()
+        self.assertEqual(found, [])
 
     def test_version_tracks_correctly(self):
         self.assertEqual(

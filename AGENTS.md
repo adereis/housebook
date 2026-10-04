@@ -280,30 +280,36 @@ those credits are excluded from the moment they are ingested.
 just-ingested card can show a misleading (even negative) spending
 total until it is audited.
 
-**How `CC Payment` gets set at audit time — and two traps.** It is *not*
-applied by `CC_PAYMENT_PATTERNS` (that engine lives in
-`core/intelligence.py` and is only consulted by the *ingestors'*
-`Intelligence`, e.g. Amazon, which categorizes at ingest — the CC
-ingestor has no `Intelligence`). The audit-time tool
-`housebook-audit apply-rules` does **not** use that engine either: it
-applies `rules.json` keyword→category mappings, and only to rows
-whose `date >= one_year_ago` (a hard 365-day window) whose category
-is still generic. So `CC Payment` is set during audit *only if*
-`rules.json` has a matching keyword under a `CC Payment` category
-**and** the row is within the last year. Traps:
+**Categorization rules live only in `$WORKSPACE/config/rules.json`.**
+It maps each category to its keywords, and its keys are the category
+list the dashboard offers. A DB table (`categorization_rules`) used
+to hold a copy that ingest read, but it was seeded once and then
+edited separately, so ingest and `apply-rules` categorized from
+different rules. Migration 024 dropped it. A category correction in
+the web UI no longer creates a rule. It marks the row
+`USER_VERIFIED`, and the audit's precedent lookup reuses it from
+there.
+
+**How `CC Payment` gets set at audit time — and one trap.** The CC
+ingestor has no `Intelligence`, so it never categorizes. At audit,
+`housebook-audit apply-rules` runs the same `Intelligence` matcher
+(`core/intelligence.py`) that Amazon ingest uses. It tries
+`CC_PAYMENT_PATTERNS` on negative amounts first, then
+`exclusions.json`, then the longest `rules.json` keyword that matches
+as a whole word (ignoring case), then `heuristics.json`. It rewrites
+only rows whose category is still generic, and only within its date
+window. Because the longest keyword wins, an issuer's exact payment
+wording (`AUTOPAY PAYMENT RECEIVED`) beats a generic token such as
+`AUTOPAY` under `Transfers & Refunds`, wherever each sits in the
+file; file order only breaks ties between keywords of equal length.
+Issuers phrase payments differently (`PAYMENT - THANK YOU`,
+`AUTOPAY PAYMENT RECEIVED`, …), so add each new wording under
+`CC Payment` as you meet it. The trap:
 - **365-day window:** a historical backfill (e.g. importing years of
-  old statements) is almost entirely *outside* `apply-rules`' scope —
-  it will categorize almost nothing. Tag those rows directly with
-  `housebook-audit verify <ids> --category "CC Payment"`.
-- **First match wins, in file order:** `apply-rules` walks the
-  categories in `rules.json` order and stops at the first keyword
-  that matches as a whole word, ignoring case. A generic keyword such
-  as `PYMT` or `AUTOPAY` under `Transfers & Refunds` (which is *not*
-  a spending-view exclusion) therefore beats a `CC Payment` keyword
-  listed later. Keep the `CC Payment` category *first* in the file,
-  with each issuer's exact payment wording; issuers phrase it
-  differently (`PAYMENT - THANK YOU`, `AUTOPAY PAYMENT RECEIVED`, …),
-  so add each new wording as you meet it.
+  old statements) is almost entirely *outside* `apply-rules`' default
+  scope — it will categorize almost nothing. Tag those rows directly
+  with `housebook-audit verify <ids> --category "CC Payment"`, or
+  widen the pass with `apply-rules --all`.
 
 Once categorized, `CC Payment` rows stay in the DB but are excluded
 from all spending views. (Amazon, by contrast, categorizes at

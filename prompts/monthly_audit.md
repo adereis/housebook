@@ -5,7 +5,7 @@ Use Agent intelligence to verify transaction categorizations from the last 1 yea
 
 ## Prerequisites
 - Read `config/user_profile.json` (`special_notes`) before starting. It contains user-specific financial behaviors, dedicated accounts, and expected data gaps that affect categorization decisions.
-- Do NOT read `config/rules.json` for audit decisions — rules.json is consumed by the ingestion pipeline ("dumb pipes"). Your role is intelligent review. However, you MUST add new rules to `config/rules.json` when you discover recurring patterns or fix miscategorizations (Step 4).
+- Do NOT read `config/rules.json` for audit decisions — rules.json is consumed by ingest and `apply-rules` ("dumb pipes"). Your role is intelligent review. However, you MUST add new rules to `config/rules.json` when you discover recurring patterns or fix miscategorizations (Step 4).
 - **Always check the `metadata` column** when investigating transactions. Credit card statements (especially Amex) embed rich detail: flight legs, passenger names, ticket numbers, departure dates, merchant addresses, etc. This context is essential for trip assignment, refund matching, and disambiguation. Use `housebook-audit pending --json` to get metadata inline.
 
 ## CLI Tool: `housebook-audit`
@@ -95,7 +95,9 @@ Use `housebook-audit verify` to batch-process decisions. The command enforces th
     - Leave as is for the user to decide in the UI.
 
 ## Step 4: Rule Hardening
-- Every time you verify a merchant, check if a general rule exists. If not, add it to `config/rules.json`.
+- Every time you verify a merchant, check if a general rule exists. If not, add it to `config/rules.json`. It is the only rule store; web UI corrections never create rules.
+- The **longest** matching keyword wins, in whichever category it sits; file order only breaks ties. So a specific keyword (`Whey Protein`, `AUTOPAY PAYMENT RECEIVED`) automatically beats a generic one (`Amazon`, `AUTOPAY`). Prefer specific, multi-word keywords, and treat a short generic one as a fallback.
+- Before adding a keyword, test it against verified history: the verified rows it matches (whole word, ignoring case) should already carry its category. Skip a keyword that contradicts them, or that would only re-assert the default category.
 
 ## Step 5: Post-Audit Summary
 Run `housebook-audit summary` to generate a report of all changes made during the session. Present this to the user for final review before pushing to Drive.

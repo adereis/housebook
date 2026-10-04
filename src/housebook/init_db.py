@@ -1,6 +1,5 @@
-import json
 import os
-import sqlite3
+import shutil
 
 from housebook.config.settings import (
     BACKUP_DIR,
@@ -27,45 +26,14 @@ def init_db():
     print("Running schema migrations...")
     run_migrations(DB_PATH)
 
-    # 2. Seed categorization rules from JSON
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA journal_mode=WAL")
-    c = conn.cursor()
+    # 2. Give a new workspace its live rules.json. It is the only rule
+    # store (ingest and apply-rules read it, the dashboard lists its
+    # categories), so start it from the template rather than leaving
+    # the workspace without one. An existing file is never touched.
+    if not os.path.exists(RULES_JSON):
+        shutil.copyfile(EXAMPLE_RULES_JSON, RULES_JSON)
+        print(f"Created {RULES_JSON} from the template")
 
-    seed_json = RULES_JSON
-    if not os.path.exists(seed_json):
-        seed_json = EXAMPLE_RULES_JSON
-
-    if os.path.exists(seed_json):
-        with open(seed_json, "r") as f:
-            categories = json.load(f)
-
-        for cat, keywords in categories.items():
-            for kw in keywords:
-                c.execute(
-                    "INSERT OR IGNORE INTO "
-                    "categorization_rules "
-                    "(category, keyword) VALUES (?, ?)",
-                    (cat, kw),
-                )
-
-        essential = [
-            "Work (Reimbursable)",
-            "Excluded",
-            "Miscellaneous",
-        ]
-        for cat in essential:
-            c.execute(
-                "INSERT OR IGNORE INTO "
-                "categorization_rules "
-                "(category, keyword) VALUES (?, ?)",
-                (cat, f"MANUAL_{cat.upper()}"),
-            )
-
-        print(f"Seeded rules from {seed_json}")
-
-    conn.commit()
-    conn.close()
     print("Database initialized successfully.")
 
 

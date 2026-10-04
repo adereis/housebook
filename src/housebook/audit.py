@@ -775,11 +775,17 @@ def cmd_summary(args):
 
 
 def cmd_apply_rules(args):
-    """Apply rules.json category guesses to pending transactions."""
-    import re
+    """Apply rules.json category guesses to pending transactions.
+
+    Uses the same `Intelligence` matcher as ingest (the longest
+    matching keyword wins), so a guess here never contradicts the one
+    an ingestor would make for the same description.
+    """
     from datetime import datetime, timedelta
+    from decimal import Decimal
 
     from housebook.config.settings import RULES_JSON
+    from housebook.core.intelligence import Intelligence, load_rules
 
     db_path = getattr(args, "db_path", None) or DB_PATH
     if not os.path.exists(RULES_JSON):
@@ -790,8 +796,7 @@ def cmd_apply_rules(args):
     if bk:
         print(f"  Pre-audit backup: {bk}")
 
-    with open(RULES_JSON, "r") as f:
-        mapping = json.load(f)
+    intel = Intelligence(load_rules(RULES_JSON))
 
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -809,13 +814,13 @@ def cmd_apply_rules(args):
 
     if floor is None:
         pending = conn.execute(
-            "SELECT id, description, category FROM transactions "
+            "SELECT id, description, amount, category FROM transactions "
             "WHERE needs_review = 1"
         ).fetchall()
         skipped_older = 0
     else:
         pending = conn.execute(
-            "SELECT id, description, category FROM transactions "
+            "SELECT id, description, amount, category FROM transactions "
             "WHERE needs_review = 1 AND date >= ?",
             (floor,),
         ).fetchall()
@@ -837,17 +842,12 @@ def cmd_apply_rules(args):
     for tx in pending:
         if tx["category"] not in overridable:
             continue
-        desc = tx["description"].upper()
-        found_cat = None
-        for cat, keywords in mapping.items():
-            for kw in keywords:
-                pattern = r"\b" + re.escape(kw.upper()) + r"\b"
-                if re.search(pattern, desc):
-                    found_cat = cat
-                    break
-            if found_cat:
-                break
-        if found_cat and found_cat != tx["category"]:
+        found_cat, confidence = intel.get_category(
+            tx["description"] or "", Decimal(str(tx["amount"] or 0)),
+        )
+        if confidence == "guess":
+            continue
+        if found_cat != tx["category"]:
             conn.execute(
                 "UPDATE transactions SET category = ? WHERE id = ?",
                 (found_cat, tx["id"]),

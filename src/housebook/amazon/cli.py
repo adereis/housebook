@@ -13,6 +13,7 @@ from pathlib import Path, PurePosixPath
 
 from housebook.config.settings import (
     DB_PATH,
+    RULES_JSON,
     WORKSPACE_DIR,
 )
 
@@ -158,8 +159,12 @@ def cmd_ingest(args):
         workspace_dir=str(WORKSPACE_DIR),
     )
 
-    from housebook.core.intelligence import Intelligence
-    intel = Intelligence(db.get_rules())
+    from housebook.core.intelligence import Intelligence, load_rules
+    try:
+        intel = Intelligence(load_rules(RULES_JSON))
+    except FileNotFoundError as e:
+        print(f"  Error: {e}")
+        sys.exit(1)
 
     ingestor = AmazonIngestor(db, intel)
     try:
