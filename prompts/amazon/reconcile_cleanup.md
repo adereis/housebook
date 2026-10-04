@@ -17,20 +17,34 @@ user before and after.
 # Always preview first
 housebook-reconcile --dry-run
 
-# The summary prints the split: N match(es) (X bnpl, Y aggregate, Z fuzzy)
-# Aggregate matches show (N lines, <order-id>); BNPL show (bnpl, <order-id>).
+# The summary prints the split: N match(es) (W order id, X bnpl, ...)
+# Order-ID matches show (order <id>); orphans print their reason.
 # Scan for surprises, then apply:
 housebook-reconcile
 ```
 
-The default 3-day window plus the BNPL (pass 0) and
-aggregate-by-Order-ID (pass 1) passes grab everything cleanly
-matchable. After that, what remains is the residual orphan pile.
+Bank rows that carry an Order ID (the Amazon card's statements print
+one per charge) are settled exactly by the Order-ID pass, however
+late they posted. What is left for them is two kinds of orphan:
+
+- **"order … is in no Amazon export"**: usually a purchase on an
+  account whose export is stale or missing. Refresh that account's
+  export, ingest it, and reconcile again. Until then the bank row is
+  the only record of the purchase, so it correctly stays visible.
+- **"exceeds order …'s total"**: Amazon charged more than the export
+  lists for that order, e.g. a re-charge after a refund. Real
+  spending; leave it visible.
+
+The date-window passes below matter only for bank rows without an
+Order ID. There, the default 3-day window plus the BNPL and
+aggregate passes grab everything cleanly matchable, and what remains
+is the residual orphan pile.
 
 ## Widening the date window (one-off residual cleanup)
 
-Amazon's order-date/ship-date decoupling (see the module README)
-means real matches can sit weeks apart. After the standard passes
+This applies only to bank rows **without** an Order ID; the Order-ID
+pass already ignores dates. Amazon's order-date/ship-date decoupling
+(see the module README) means real matches can sit weeks apart. After the standard passes
 have run, a wider window recovers delayed-shipment matches:
 
 ```

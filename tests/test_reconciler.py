@@ -897,3 +897,182 @@ class TestReconcilerBnpl(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestReconcilerOrderIdPass(unittest.TestCase):
+    """Bank rows that carry an Amazon Order ID match that order only.
+
+    The Amazon card's statements print each charge's order number.
+    Matching on it needs no date window, so Subscribe & Save and
+    pre-orders that charge weeks after the order date still match. It
+    also cannot pair a charge with an unrelated order of the same
+    amount, which the date passes did.
+    """
+
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        self.addCleanup(os.unlink, self.db_path)
+        self.addCleanup(os.close, self.db_fd)
+        self.db = Database(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("""CREATE TABLE transactions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            date DATE, description TEXT, amount REAL, category TEXT,
+            source TEXT, status TEXT, original_file TEXT,
+            trip_id INTEGER, needs_review BOOLEAN,
+            profile TEXT, metadata TEXT
+        )""")
+        conn.commit()
+        conn.close()
+        patcher = patch(
+            "housebook.core.reconciler.Reconciler._load_json",
+            return_value={"amazon_keywords": ["AMZN", "AMAZON"],
+                          "date_window_days": 3},
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _csv(self, date, amount, oid, csv_tag="orders"):
+        self.db.add_transaction(Transaction(
+            date, "Amazon: Ledger Item", Decimal(amount), "Shopping",
+            "Amazon", "AGENT_VERIFIED", "amazon.csv",
+            metadata=_amazon_meta(oid, csv_tag),
+        ))
+
+    def _bank(self, date, amount, oid=None, status="UNVERIFIED"):
+        self.db.add_transaction(Transaction(
+            date, "AMAZON MKTPL*LEDGER01", Decimal(amount), "Misc",
+            "Summit-Card", status, "summit.pdf",
+            metadata=json.dumps({"amazon_order_id": oid}) if oid else None,
+        ))
+
+    def _status(self):
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT date, amount, status FROM transactions "
+            "WHERE source != 'Amazon' ORDER BY id",
+        ).fetchall()
+        conn.close()
+        return [(d, a, s) for d, a, s in rows]
+
+    def _run(self):
+        rec = Reconciler(self.db)
+        rec.reconcile_amazon()
+        return rec
+
+    def test_order_id_matches_beyond_date_window(self):
+        """A Subscribe & Save charge posts 19 days after the order."""
+        self._csv("2025-03-01", "40.00", "111-0000001-0000001")
+        self._bank("2025-03-20", "40.00", "111-0000001-0000001")
+        rec = self._run()
+        self.assertEqual(len(rec.last_matches), 1)
+        self.assertEqual(rec.last_matches[0]["matcher"], "order_id")
+        self.assertEqual(self._status()[0][2], "RECONCILED")
+
+    def test_order_in_no_export_is_orphan_not_fuzzy_matched(self):
+        """Same amount and date as a CSV order, but another order: a
+        purchase on an account whose export is missing or stale."""
+        self._csv("2025-03-01", "25.00", "111-0000001-0000001")
+        self._bank("2025-03-02", "25.00", "111-0000009-0000009")
+        rec = self._run()
+        self.assertEqual(rec.last_matches, [])
+        self.assertIn("in no Amazon export", rec.last_orphans[0]["reason"])
+        self.assertEqual(self._status()[0][2], "UNVERIFIED")
+
+    def test_split_shipments_fill_the_order_then_stop(self):
+        oid = "111-0000001-0000001"
+        self._csv("2025-03-01", "10.00", oid)
+        self._csv("2025-03-01", "15.00", oid)
+        self._bank("2025-03-02", "10.00", oid)
+        self._bank("2025-03-05", "15.00", oid)
+        self._bank("2025-03-07", "10.00", oid)
+        rec = self._run()
+        self.assertEqual(len(rec.last_matches), 2)
+        self.assertEqual(
+            [s for _, _, s in self._status()],
+            ["RECONCILED", "RECONCILED", "UNVERIFIED"],
+        )
+        self.assertIn("exceeds", rec.last_orphans[0]["reason"])
+
+    def test_charges_hidden_by_earlier_runs_count(self):
+        """A second run must not hide the same order twice, even when
+        the new charge sits inside the date window."""
+        oid = "111-0000001-0000001"
+        self._csv("2025-03-01", "30.00", oid)
+        self._bank("2025-03-02", "30.00", oid, status="RECONCILED")
+        self._bank("2025-03-03", "30.00", oid)
+        rec = self._run()
+        self.assertEqual(rec.last_matches, [])
+        self.assertEqual(self._status()[1][2], "UNVERIFIED")
+
+    def test_refund_credit_matches_the_order_refund_total(self):
+        oid = "111-0000001-0000001"
+        self._csv("2025-03-01", "12.00", oid)
+        self._csv("2025-03-10", "-12.00", oid, csv_tag="refunds")
+        self._bank("2025-03-02", "12.00", oid)
+        self._bank("2025-03-12", "-12.00", oid)
+        rec = self._run()
+        self.assertEqual(len(rec.last_matches), 2)
+        self.assertEqual(rec.last_orphans, [])
+
+    def test_order_id_match_claims_rows_before_date_passes(self):
+        """A bank row without an ID cannot re-claim a CSV row that a
+        row with an ID already matched."""
+        self._csv("2025-03-01", "20.00", "111-0000001-0000001")
+        self._bank("2025-03-02", "20.00", "111-0000001-0000001")
+        self._bank("2025-03-02", "20.00")
+        rec = self._run()
+        self.assertEqual(len(rec.last_matches), 1)
+        self.assertEqual(len(rec.last_orphans), 1)
+
+
+    def test_order_id_marks_a_charge_amazon_whatever_its_name(self):
+        """A digital rental bills as "Prime Video *…", with no Amazon
+        keyword; its Order ID still identifies it."""
+        oid = "D01-0000004-0000004"
+        self._csv("2025-04-02", "3.49", oid, csv_tag="digital")
+        self.db.add_transaction(Transaction(
+            "2025-04-02", "Prime Video *LEDGER9", Decimal("3.49"), "Misc",
+            "Summit-Card", "UNVERIFIED", "summit.pdf",
+            metadata=json.dumps({"amazon_order_id": oid}),
+        ))
+        rec = self._run()
+        self.assertEqual(len(rec.last_matches), 1)
+
+
+class TestReconcilerDatePassChoice(unittest.TestCase):
+    """Bank rows without an Order ID pick the closest order, and never
+    one placed after the charge (beyond the UTC slack day).
+
+    Regression: the first same-amount candidate in the window won, so
+    two equal charges three days apart were cross-paired, each with
+    the other's order.
+    """
+
+    setUp = TestReconcilerOrderIdPass.setUp
+    _csv = TestReconcilerOrderIdPass._csv
+    _bank = TestReconcilerOrderIdPass._bank
+    _run = TestReconcilerOrderIdPass._run
+
+    def _pairs(self, rec):
+        return sorted((m["bank_date"], m["amazon_date"])
+                      for m in rec.last_matches)
+
+    def test_equal_charges_pair_with_their_own_orders(self):
+        self._csv("2025-05-13", "57.25", "111-0000002-0000002")
+        self._csv("2025-05-10", "57.25", "111-0000001-0000001")
+        self._bank("2025-05-10", "57.25")
+        self._bank("2025-05-13", "57.25")
+        rec = self._run()
+        self.assertEqual(self._pairs(rec), [
+            ("2025-05-10", "2025-05-10"), ("2025-05-13", "2025-05-13"),
+        ])
+
+    def test_charge_before_order_matches_only_within_slack(self):
+        self._csv("2025-06-02", "9.99", "D01-0000001-0000001", "digital")
+        self._csv("2025-06-12", "7.50", "111-0000003-0000003")
+        self._bank("2025-06-01", "9.99")   # evening order, UTC next day
+        self._bank("2025-06-10", "7.50")   # two days before the order
+        rec = self._run()
+        self.assertEqual(self._pairs(rec), [("2025-06-01", "2025-06-02")])
+        self.assertEqual(len(rec.last_orphans), 1)

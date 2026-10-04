@@ -237,7 +237,30 @@ spending-view filter (`status = 'RECONCILED'`) hides it. The
 counted source of truth. The matcher tracks consumed Amazon rows
 so one CSV row cannot be claimed by multiple bank charges.
 
-**Matching runs in three passes.** **Pass 0 (BNPL)** finds Amazon
+**The Order-ID pass runs first and settles every bank row that
+carries an Order ID.** The Amazon card's statements print each
+charge's order number, and the CC import stores it as
+`metadata.amazon_order_id` on the bank row. Such a row counts as an
+Amazon charge even when its description has no Amazon keyword
+(`Prime Video *…`, `Kindle Unltd*…`). It matches its own order
+only, with no date window: it is hidden while the order's
+hidden charges stay within the order's CSV purchase total (credits
+against its refund total). Charges hidden by earlier runs carry the
+ID too, so they count, and a second run cannot hide an order twice.
+This handles split shipments, BNPL installments, and Subscribe &
+Save or pre-orders that charge weeks or months after the order
+date. A row whose order is in no export (typically another account
+whose export is stale) or whose charge would exceed the order's
+total stays visible as an orphan with that reason. It never falls
+through to the date passes below, which could pair it with an
+unrelated order of the same amount.
+
+**Bank rows without an Order ID go through three date-based
+passes.** Each picks the candidate closest in date and never an
+order dated more than one day after the charge (CSV order dates
+are UTC). Taking the first same-amount candidate had cross-paired
+two equal charges, each with the other's order. **Pass 0 (BNPL)**
+finds Amazon
 CSV rows tagged `metadata.is_bnpl=true` (BNPL plans), then matches
 bank rows whose amount equals the plan's downpayment, regular
 installment, or **final installment** (which absorbs the rounding
@@ -276,12 +299,14 @@ Excluded rows are not orphan-reported. The list is empty by default,
 because the cafeteria codes differ by building; add the codes that
 appear on your own cards to the workspace reconciler config.
 
-**Always run `--dry-run` first** — the fuzzy pass is still
+**Always run `--dry-run` first** — for rows without an Order ID
+the fuzzy pass is still
 amount+date and can mis-pair two unrelated same-amount charges
 within the window on a high-volume card. The CLI summary prints
-the split (`N match(es) (X bnpl, Y aggregate, Z fuzzy)`); aggregate
-matches show `(N lines, <order-id>)` and BNPL matches show
-`(bnpl, <order-id>)` so you can scan for surprises.
+the split (`N match(es) (W order id, X bnpl, Y aggregate, Z fuzzy)`);
+Order-ID matches show `(order <order-id>)`, aggregate matches
+`(N lines, <order-id>)` and BNPL matches `(bnpl, <order-id>)` so you
+can scan for surprises. Each orphan prints its reason.
 
 **Orphan bank-Amazon rows** — bank rows whose description matches
 Amazon merchant patterns but that did *not* match any CSV row —

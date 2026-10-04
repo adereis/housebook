@@ -14,6 +14,11 @@ from housebook.config.settings import (
 from .database import Database
 from .models import CATEGORY_TRANSFERS_REFUNDS
 
+# Amazon CSV order dates are UTC. An evening order in the Americas
+# carries the next day's date, so its charge can post one day "before"
+# the order. A charge any earlier than that cannot belong to the order.
+ORDER_DATE_SLACK_DAYS = 1
+
 
 def _parse_date(value) -> Optional[datetime]:
     """Parse an ISO date, or None if it is missing/malformed.
@@ -26,6 +31,39 @@ def _parse_date(value) -> Optional[datetime]:
         return datetime.strptime(value, "%Y-%m-%d")
     except (ValueError, TypeError):
         return None
+
+
+def _date_gap(b_date: datetime, a_value, window: int) -> Optional[int]:
+    """Days between a bank row and a CSV date, if they can pair.
+
+    The charge may post up to ``window`` days after the order and at
+    most ``ORDER_DATE_SLACK_DAYS`` before it. Returns the absolute
+    gap, for picking the closest candidate, or None.
+    """
+    a_date = _parse_date(a_value)
+    if a_date is None:
+        return None
+    days = (b_date - a_date).days
+    if -ORDER_DATE_SLACK_DAYS <= days <= window:
+        return abs(days)
+    return None
+
+
+def _order_id(row) -> Optional[str]:
+    """Return the row's ``metadata.amazon_order_id``, or None.
+
+    Amazon CSV rows carry it from ingest. Bank rows carry it when the
+    statement prints each charge's order number (the Amazon card's
+    statements do).
+    """
+    meta = row["metadata"]
+    if not meta:
+        return None
+    try:
+        m = json.loads(meta)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return m.get("amazon_order_id") if isinstance(m, dict) else None
 
 
 class Reconciler:
@@ -59,7 +97,21 @@ class Reconciler:
         ``AGENTS.md`` "Amazon ↔ bank reconciliation"), those rows
         double-count with the CSV and must be hidden.
 
-        Matching runs in three passes:
+        **Order-ID pass (first, and final for its rows).** A bank row
+        whose metadata carries ``amazon_order_id`` can only belong to
+        that order, so it is matched by ID alone, with no date window.
+        It is hidden while the order's hidden bank charges, including
+        those reconciled by earlier runs, stay within the order's CSV
+        purchase total. Credits are held to the order's refund total
+        the same way. This covers split shipments, Subscribe & Save
+        and pre-orders that charge weeks after the order date, and
+        BNPL installments. A row whose order is in no export, or whose
+        charge would exceed the order's total, becomes an orphan with
+        that reason. It never falls through to the date-based passes,
+        which could pair it with an unrelated same-amount order.
+
+        Bank rows without an Order ID go through three date-based
+        passes:
 
         **Pass 0 — BNPL.** Amazon CSV rows tagged
         ``metadata.is_bnpl=true`` (with ``installment_count`` and
@@ -91,8 +143,12 @@ class Reconciler:
         not match an aggregate, the historical per-row matcher runs:
         match a single CSV row by amount (within 1¢) and date
         (within ``date_window_days``). Handles single-row orders and
-        rows where the CSV side has no Order ID metadata (e.g. the
-        14 §6c excess refunds).
+        rows where the CSV side has no Order ID metadata.
+
+        Passes 1 and 2 pick the candidate closest in date, and never
+        one dated more than ``ORDER_DATE_SLACK_DAYS`` after the bank
+        row: a charge cannot precede its order. Taking the first
+        same-amount candidate instead cross-paired two equal charges.
 
         For each match, the **bank-side** row is marked
         ``status='RECONCILED'`` and recategorized to Transfers &
@@ -108,8 +164,10 @@ class Reconciler:
         should be surfaced to the user, not silently left visible.
 
         Each ``last_matches`` entry carries a ``"matcher"`` field
-        (``"aggregate"`` or ``"fuzzy"``); aggregate matches also
-        include ``"amazon_order_id"`` and ``"n_lines"``.
+        (``"order_id"``, ``"bnpl"``, ``"aggregate"`` or ``"fuzzy"``);
+        all but fuzzy also include ``"amazon_order_id"`` and
+        ``"n_lines"``. Each ``last_orphans`` entry carries a
+        ``"reason"``.
 
         When ``dry_run`` is True, no UPDATEs are issued and nothing is
         committed; ``self.last_matches`` and ``self.last_orphans`` are
@@ -140,14 +198,17 @@ class Reconciler:
 
         # Bank-side Amazon-merchant rows not yet reconciled. Filtering
         # on status as well as category protects against legacy rows
-        # that were RECONCILED without category being rewritten.
+        # that were RECONCILED without category being rewritten. A row
+        # carrying an Amazon Order ID is an Amazon charge whatever its
+        # description says ("Prime Video *…", "Kindle Unltd*…").
         c.execute(
             f"""
             SELECT * FROM transactions
             WHERE source != 'Amazon'
-            AND status != 'RECONCILED'
-            AND category != ?
-            AND ({keyword_clauses})
+            AND (status IS NULL OR status != 'RECONCILED')
+            AND (category IS NULL OR category != ?)
+            AND ({keyword_clauses}
+                 OR metadata LIKE '%"amazon_order_id"%')
             """,
             (CATEGORY_TRANSFERS_REFUNDS,
              *[f"%{kw}%" for kw in keywords]),
@@ -180,6 +241,19 @@ class Reconciler:
         aggregates = self._build_amazon_aggregates(amazon_txs)
         consumed_amazon_ids: set = set()
 
+        # Order-ID pass: settles every bank row that carries an Order
+        # ID, counting what earlier runs already hid against each
+        # order. Only rows without an ID go on to the date passes.
+        c.execute(
+            "SELECT amount, metadata FROM transactions "
+            "WHERE source != 'Amazon' AND status = 'RECONCILED'"
+        )
+        decided = self._try_order_id_pass(
+            bank_txs, amazon_txs, c.fetchall(),
+            consumed_amazon_ids, dry_run, c,
+        )
+        bank_txs = [b for b in bank_txs if b["id"] not in decided]
+
         # Pass 0: BNPL plan-based matching. Bank rows matching a
         # BNPL plan's downpayment/installment schedule are paired as
         # a group against the single gross Order History row tagged
@@ -210,18 +284,123 @@ class Reconciler:
                 b_tx, amazon_txs, consumed_amazon_ids,
                 date_window_days, dry_run, c,
             ):
-                self.last_orphans.append({
-                    "bank_id": b_tx["id"],
-                    "bank_date": b_tx["date"],
-                    "bank_desc": b_tx["description"],
-                    "bank_source": b_tx["source"],
-                    "amount": float(Decimal(str(b_tx["amount"]))),
-                })
+                self._add_orphan(
+                    b_tx, f"no CSV row of this amount within "
+                          f"{date_window_days} day(s)",
+                )
 
         if not dry_run:
             conn.commit()
         conn.close()
         return len(self.last_matches), len(self.last_orphans)
+
+    def _add_orphan(self, b_tx, reason: str) -> None:
+        self.last_orphans.append({
+            "bank_id": b_tx["id"],
+            "bank_date": b_tx["date"],
+            "bank_desc": b_tx["description"],
+            "bank_source": b_tx["source"],
+            "amount": float(Decimal(str(b_tx["amount"]))),
+            "reason": reason,
+        })
+
+    # ── Order-ID pass ──────────────────────────────────────────
+
+    def _try_order_id_pass(
+        self, bank_txs, amazon_txs, reconciled, consumed, dry_run, c,
+    ) -> set:
+        """Match bank rows that carry an Order ID to that order only.
+
+        Returns the IDs of every bank row with an Order ID, matched or
+        orphaned, so the date passes never see them.
+
+        An order may be charged in several pieces (one charge per
+        shipment, or BNPL installments), so a charge is not matched to
+        a CSV row. It is held against the order's running total.
+        Charges hidden by earlier runs carry their Order ID, so they
+        count too, and two runs cannot hide the same order twice.
+        Credits are held to the order's refund total the same way.
+        """
+        ledger = self._build_order_ledger(amazon_txs)
+        hidden: dict = {}
+        for row in reconciled:
+            oid = _order_id(row)
+            if oid:
+                amount = Decimal(str(row["amount"]))
+                side = hidden.setdefault(oid, [Decimal(0), Decimal(0)])
+                side[0 if amount >= 0 else 1] += amount
+
+        decided: set = set()
+        with_id = [b for b in bank_txs if _order_id(b)]
+        for b_tx in sorted(with_id, key=lambda b: (b["date"] or "", b["id"])):
+            oid = _order_id(b_tx)
+            decided.add(b_tx["id"])
+            order = ledger.get(oid)
+            if order is None:
+                self._add_orphan(b_tx, f"order {oid} is in no Amazon export")
+                continue
+            amount = Decimal(str(b_tx["amount"]))
+            side = 0 if amount >= 0 else 1
+            total, row_ids = order["sides"][side]
+            so_far = hidden.setdefault(oid, [Decimal(0), Decimal(0)])
+            kind = "purchase" if side == 0 else "refund"
+            if not row_ids:
+                self._add_orphan(
+                    b_tx, f"order {oid} has no {kind} in the export",
+                )
+                continue
+            if abs(so_far[side] + amount) > abs(total) + Decimal("0.005"):
+                self._add_orphan(
+                    b_tx, f"exceeds order {oid}'s {kind} total "
+                          f"in the export ({total})",
+                )
+                continue
+            so_far[side] += amount
+            consumed.update(row_ids)
+            self.last_matches.append({
+                "bank_id": b_tx["id"],
+                "bank_date": b_tx["date"],
+                "bank_desc": b_tx["description"],
+                "bank_source": b_tx["source"],
+                "amazon_id": row_ids[0],
+                "amazon_date": order["date"],
+                "amount": float(amount),
+                "matcher": "order_id",
+                "amazon_order_id": oid,
+                "n_lines": len(row_ids),
+            })
+            if not dry_run:
+                self._mark_bank_reconciled(c, b_tx["id"])
+        return decided
+
+    @staticmethod
+    def _build_order_ledger(amazon_txs) -> dict:
+        """Per Order ID: purchase and refund totals with their rows.
+
+        ``sides[0]`` holds purchases (``csv`` orders/digital) and
+        ``sides[1]`` refunds (refunds/digital_refunds), each as
+        ``(total, row_ids)``. A side with no rows has a zero total, so
+        any charge against it is reported rather than hidden.
+        """
+        ledger: dict = {}
+        for a_tx in amazon_txs:
+            meta = a_tx["metadata"]
+            try:
+                m = json.loads(meta) if meta else {}
+            except (json.JSONDecodeError, TypeError):
+                continue
+            oid = m.get("amazon_order_id") if isinstance(m, dict) else None
+            if not oid:
+                continue
+            side = 0 if m.get("csv") in ("orders", "digital") else 1
+            order = ledger.setdefault(oid, {
+                "date": a_tx["date"],
+                "sides": [[Decimal(0), []], [Decimal(0), []]],
+            })
+            order["date"] = min(order["date"], a_tx["date"])
+            order["sides"][side][0] += Decimal(str(a_tx["amount"]))
+            order["sides"][side][1].append(a_tx["id"])
+        return ledger
 
     # ── Pass 0 helpers (BNPL) ──────────────────────────────────
 
@@ -441,6 +620,7 @@ class Reconciler:
         if b_date is None:
             return False
         b_amount = Decimal(str(b_tx["amount"]))
+        candidates = []
         for agg in aggregates:
             # An aggregate with ANY consumed row is no longer
             # available at its full total. Skip rather than match
@@ -449,9 +629,11 @@ class Reconciler:
                 continue
             if abs(b_amount - agg["total"]) >= Decimal("0.01"):
                 continue
-            a_date = _parse_date(agg["date"])
-            if a_date is None or abs((b_date - a_date).days) > window:
-                continue
+            gap = _date_gap(b_date, agg["date"], window)
+            if gap is not None:
+                candidates.append((gap, agg))
+        if candidates:
+            agg = min(candidates, key=lambda pair: pair[0])[1]
             consumed.update(agg["row_ids"])
             self.last_matches.append({
                 "bank_id": b_tx["id"],
@@ -479,15 +661,18 @@ class Reconciler:
         if b_date is None:
             return False
         b_amount = Decimal(str(b_tx["amount"]))
+        candidates = []
         for a_tx in amazon_txs:
             if a_tx["id"] in consumed:
                 continue
             a_amount = Decimal(str(a_tx["amount"]))
             if abs(b_amount - a_amount) >= Decimal("0.01"):
                 continue
-            a_date = _parse_date(a_tx["date"])
-            if a_date is None or abs((b_date - a_date).days) > window:
-                continue
+            gap = _date_gap(b_date, a_tx["date"], window)
+            if gap is not None:
+                candidates.append((gap, a_tx))
+        if candidates:
+            a_tx = min(candidates, key=lambda pair: pair[0])[1]
             consumed.add(a_tx["id"])
             self.last_matches.append({
                 "bank_id": b_tx["id"],
@@ -524,15 +709,16 @@ def main(argv=None):
     """Console entrypoint: `housebook-reconcile`.
 
     Hides bank/CC Amazon-merchant rows that duplicate the Amazon CSV
-    (source of truth). Matches by amount (within 1¢) and date (within
-    the configured window, default 3 days), then marks the **bank-side**
-    row RECONCILED + Transfers & Refunds. The Amazon CSV row is never
-    modified.
+    (source of truth). A bank row carrying an Order ID matches that
+    order exactly; others match by amount (within 1¢) and date (within
+    the configured window, default 3 days). Either way the
+    **bank-side** row is marked RECONCILED + Transfers & Refunds. The
+    Amazon CSV row is never modified.
 
     This is an exceptional operation — Amazon-Chase statements are
     normally not ingested. See AGENTS.md "Amazon ↔ bank reconciliation"
     for when this runbook applies. Run with --dry-run first: the
-    matcher is fuzzy (amount+date), so two unrelated same-amount
+    date-based passes are amount+date, so two unrelated same-amount
     charges within the window can mis-pair on a high-volume card.
 
     Orphan bank-Amazon rows (no CSV match) are reported separately
@@ -573,7 +759,9 @@ def main(argv=None):
         # BNPL matches: append "(bnpl, <order-id>)" so the user can
         # spot installment groups in the output.
         extra = ""
-        if m.get("matcher") == "aggregate" and m.get("n_lines", 1) > 1:
+        if m.get("matcher") == "order_id":
+            extra = f"  (order {m['amazon_order_id']})"
+        elif m.get("matcher") == "aggregate" and m.get("n_lines", 1) > 1:
             extra = f"  ({m['n_lines']} lines, {m['amazon_order_id']})"
         elif m.get("matcher") == "bnpl":
             extra = f"  (bnpl, {m['amazon_order_id']})"
@@ -583,6 +771,9 @@ def main(argv=None):
             f"{m['bank_desc'][:40]:40}  ↔  Amazon #{m['amazon_id']} "
             f"{m['amazon_date']}{extra}"
         )
+    n_order = sum(
+        1 for m in rec.last_matches if m.get("matcher") == "order_id"
+    )
     n_bnpl = sum(
         1 for m in rec.last_matches if m.get("matcher") == "bnpl"
     )
@@ -594,19 +785,20 @@ def main(argv=None):
     )
     print(
         f"  Reconciliation complete. {matches} match(es) "
-        f"({n_bnpl} bnpl, {n_agg} aggregate, {n_fuzzy} fuzzy)."
+        f"({n_order} order id, {n_bnpl} bnpl, {n_agg} aggregate, "
+        f"{n_fuzzy} fuzzy)."
     )
     if orphans:
         print(
             f"\n  ⚠  {orphans} bank-Amazon row(s) found NO CSV match — "
-            "review with the user (either the CSV is incomplete, or "
-            "the row predates the CSV coverage window):"
+            "review with the user (an export is missing or stale, or "
+            "the row predates export coverage):"
         )
         for o in rec.last_orphans:
             print(
                 f"    {o['bank_source']:>12} #{o['bank_id']} "
                 f"{o['bank_date']}  ${o['amount']:>9,.2f}  "
-                f"{o['bank_desc'][:60]}"
+                f"{o['bank_desc'][:40]:40}  {o['reason']}"
             )
     return 0
 

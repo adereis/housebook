@@ -199,6 +199,12 @@ Destination: `$WORKSPACE/cc/<YYYY>/` where YYYY = end_year.
   `GOOGLE … PAYMENT` refund).
 - `metadata` is free-form JSON for extra context the PDF provides
   (e.g., Amex's merchant category, flight details, passenger names).
+  **When a statement prints an Amazon order number under a charge
+  (the Amazon card's statements do), store it as
+  `{"amazon_order_id": "<order-id>"}`.** `housebook-reconcile`
+  matches such a charge to that order exactly, regardless of how
+  many days it posted after the order. Without it, the charge falls
+  back to amount-and-date guessing.
 - `page` is 1-indexed. Populate if you can; null is acceptable.
 - `tx_count_db` and `tx_total_db`: set when DB-assisted (for
   reconciliation). Null for from-scratch mode.
