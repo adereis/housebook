@@ -72,7 +72,8 @@ class TestAppDataEndpoint(unittest.TestCase):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             description TEXT NOT NULL, amount REAL NOT NULL,
             category TEXT NOT NULL, start_date DATE NOT NULL,
-            end_date DATE, frequency TEXT NOT NULL DEFAULT 'one-time'
+            end_date DATE, frequency TEXT NOT NULL DEFAULT 'one-time',
+            project_id INTEGER, trip_id INTEGER
         )""")
         c.execute("""CREATE TABLE IF NOT EXISTS schema_version (
             version INTEGER PRIMARY KEY,
@@ -281,6 +282,90 @@ class TestAppDataEndpoint(unittest.TestCase):
             "Ledger Housekeeping",
             [tx["description"] for tx in data["transactions"]],
         )
+
+    # --- Trip-linked manual expenses ---
+
+    def _trip_id(self, name):
+        conn = sqlite3.connect(self.db_path)
+        trip_id = conn.execute(
+            "SELECT id FROM trips WHERE name = ?", (name,)
+        ).fetchone()[0]
+        conn.close()
+        return trip_id
+
+    def _add_manual(self, description, amount, date, trip_id=None):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO manual_expenses "
+            "(description, amount, category, start_date, frequency, "
+            "trip_id) VALUES (?, ?, 'Entertainment', ?, 'one-time', ?)",
+            (description, amount, date, trip_id),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_trip_filter_includes_linked_manual_expense(self):
+        """A cost paid with no statement (cash on the trip) belongs in
+        the trip's view; unlinked manual expenses still stay out."""
+        trip_id = self._trip_id("Hawaii Vacation")
+        self._add_manual("Ledger cash luau", -60.00, "2026-01-14", trip_id)
+        self._add_manual("Ledger Housekeeping", -75.00, "2026-01-12")
+
+        data = self.client.get(
+            f"/api/spending/data?trip_id={trip_id}"
+        ).json()
+        descriptions = [tx["description"] for tx in data["transactions"]]
+        self.assertIn("Ledger cash luau", descriptions)
+        self.assertNotIn("Ledger Housekeeping", descriptions)
+
+    def test_trip_summary_includes_linked_manual_expense(self):
+        trip_id = self._trip_id("Hawaii Vacation")
+        self._add_manual("Ledger cash luau", -60.00, "2026-01-14", trip_id)
+
+        data = self.client.get("/api/data").json()
+        hawaii = next(
+            t for t in data["trip_summaries"]
+            if t["name"] == "Hawaii Vacation"
+        )
+        # -515 from the card + -60 paid in cash
+        self.assertAlmostEqual(hawaii["total"], -575.0)
+
+    def test_linked_manual_expense_carries_its_trip(self):
+        trip_id = self._trip_id("Hawaii Vacation")
+        self._add_manual("Ledger cash luau", -60.00, "2026-01-14", trip_id)
+
+        data = self.client.get("/api/data").json()
+        luau = next(
+            tx for tx in data["transactions"]
+            if tx["description"] == "Ledger cash luau"
+        )
+        self.assertEqual(luau["trip_id"], trip_id)
+        self.assertEqual(luau["trip_name"], "Hawaii Vacation")
+
+    def test_trip_page_lists_linked_manual_expense_in_date_order(self):
+        """The trip page computes its total from these rows, so they
+        must match the summary: card rows plus linked manual rows."""
+        trip_id = self._trip_id("Hawaii Vacation")
+        self._add_manual("Ledger cash luau", -60.00, "2026-01-14", trip_id)
+        self._add_manual("Ledger Housekeeping", -75.00, "2026-01-12")
+
+        data = self.client.get(f"/api/spending/trip/{trip_id}").json()
+        self.assertEqual(data["trip"]["name"], "Hawaii Vacation")
+        self.assertEqual(
+            [tx["description"] for tx in data["transactions"]],
+            ["Uber Airport", "Marriott Maui", "Snorkeling Tour",
+             "Ledger cash luau"],
+        )
+        self.assertAlmostEqual(
+            sum(tx["amount"] for tx in data["transactions"]), -575.0,
+        )
+        manual = data["transactions"][-1]
+        self.assertEqual(manual["source"], "MANUAL")
+        self.assertTrue(str(manual["id"]).startswith("manual_"))
+
+    def test_trip_page_unknown_trip(self):
+        data = self.client.get("/api/spending/trip/9999").json()
+        self.assertEqual(data, {"error": "Trip not found"})
 
     # --- Transactions shape ---
 

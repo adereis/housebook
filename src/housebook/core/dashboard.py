@@ -46,18 +46,15 @@ def load_spending_dashboard(
             conn, start_date=start_date,
             end_date=end_date, trip_id=trip_id,
         )
-        # Manual templates have no trip dimension. Injecting every
-        # recurrence into a trip-filtered response made an individual
-        # trip view include unrelated household expenses.
-        if trip_id is None:
-            transactions.extend(
-                _load_manual_occurrences(
-                    conn,
-                    start_date=start_date,
-                    end_date=end_date,
-                    today=today or datetime.date.today(),
-                )
+        transactions.extend(
+            _load_manual_occurrences(
+                conn,
+                start_date=start_date,
+                end_date=end_date,
+                trip_id=trip_id,
+                today=today or datetime.date.today(),
             )
+        )
 
         result = {
             "transactions": transactions,
@@ -69,6 +66,58 @@ def load_spending_dashboard(
         if include_tax_docs:
             result["tax_docs"] = _load_tax_documents(conn)
         return result
+    finally:
+        conn.close()
+
+
+def load_trip_detail(
+    db_path: str,
+    rules_json: str,
+    trip_id: int,
+    *,
+    today: datetime.date | None = None,
+) -> dict | None:
+    """Build the trip page's projection, or None for an unknown trip.
+
+    The page's total, per-day cost and charts are computed from these
+    rows, so they must be the same rows the trip summary sums: spending
+    transactions on the trip plus its linked manual expenses.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        trip = conn.execute(
+            "SELECT id, name, start_date, end_date, "
+            "status, type, location "
+            "FROM trips WHERE id = ?",
+            (trip_id,),
+        ).fetchone()
+        if trip is None:
+            return None
+        transactions = [
+            dict(row) for row in conn.execute(
+                f"""
+                SELECT t.id, t.date, t.category, t.description,
+                       t.amount, t.source, t.needs_review
+                FROM transactions t
+                WHERE t.trip_id = ?
+                  AND {SPEND_FILTER_T}
+                """,
+                (trip_id,),
+            ).fetchall()
+        ]
+        transactions.extend(
+            _load_manual_occurrences(
+                conn, start_date=None, end_date=None, trip_id=trip_id,
+                today=today or datetime.date.today(),
+            )
+        )
+        transactions.sort(key=lambda tx: tx["date"])
+        return {
+            "trip": dict(trip),
+            "transactions": transactions,
+            "categories": _load_categories(conn, rules_json),
+        }
     finally:
         conn.close()
 
@@ -166,13 +215,29 @@ def _load_manual_occurrences(
     *,
     start_date: datetime.date | None,
     end_date: datetime.date | None,
+    trip_id: int | None,
     today: datetime.date,
 ) -> list[dict]:
-    rows = conn.execute(
-        "SELECT id, description, amount, category, "
-        "start_date, end_date, frequency "
-        "FROM manual_expenses"
-    ).fetchall()
+    """Expand manual templates into dated rows.
+
+    A trip-filtered request takes only the expenses linked to that
+    trip, regardless of date, just as trip transactions are selected
+    by membership. Injecting every recurrence there once made a trip
+    view include unrelated household expenses.
+    """
+    query = (
+        "SELECT m.id, m.description, m.amount, m.category, "
+        "m.start_date, m.end_date, m.frequency, "
+        "m.trip_id, tr.name AS trip_name "
+        "FROM manual_expenses m "
+        "LEFT JOIN trips tr ON m.trip_id = tr.id"
+    )
+    params: tuple = ()
+    if trip_id is not None:
+        query += " WHERE m.trip_id = ?"
+        params = (trip_id,)
+        start_date = end_date = None
+    rows = conn.execute(query, params).fetchall()
     transactions: list[dict] = []
     for row in rows:
         manual = dict(row)
@@ -206,8 +271,8 @@ def _load_manual_occurrences(
                     "description": manual["description"],
                     "amount": manual["amount"],
                     "source": "MANUAL",
-                    "trip_name": None,
-                    "trip_id": None,
+                    "trip_name": manual["trip_name"],
+                    "trip_id": manual["trip_id"],
                     "needs_review": False,
                 })
             if manual["frequency"] == "monthly":
@@ -225,14 +290,25 @@ def _load_trip_summaries(
     work: bool,
 ) -> list[dict]:
     membership = "IN" if work else "NOT IN"
+    # A trip's cost is its spending transactions plus the one-time
+    # manual expenses linked to it (cash, transfers, parcels billed on
+    # statements that are not imported).
     rows = conn.execute(f"""
+        WITH spend AS (
+            SELECT t.trip_id, t.amount, t.date
+            FROM transactions t
+            WHERE t.trip_id IS NOT NULL AND {SPEND_FILTER_T}
+            UNION ALL
+            SELECT m.trip_id, m.amount, m.start_date
+            FROM manual_expenses m
+            WHERE m.trip_id IS NOT NULL
+        )
         SELECT tr.id, tr.name, tr.start_date, tr.end_date,
-               SUM(t.amount) AS total,
-               MIN(t.date) AS earliest_tx_date
+               SUM(s.amount) AS total,
+               MIN(s.date) AS earliest_tx_date
         FROM trips tr
-        JOIN transactions t ON t.trip_id = tr.id
-        WHERE {SPEND_FILTER_T}
-          AND tr.id {membership} (
+        JOIN spend s ON s.trip_id = tr.id
+        WHERE tr.id {membership} (
             SELECT DISTINCT t2.trip_id
             FROM transactions t2
             WHERE t2.category = 'Work (Reimbursable)'

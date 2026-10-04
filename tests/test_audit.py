@@ -94,7 +94,8 @@ def _create_test_db(db_path):
             start_date DATE NOT NULL,
             end_date DATE,
             frequency TEXT NOT NULL DEFAULT 'one-time',
-            project_id INTEGER
+            project_id INTEGER,
+            trip_id INTEGER
         );
         CREATE TABLE schema_version (
             version INTEGER PRIMARY KEY
@@ -1277,6 +1278,73 @@ class TestProjectManualExpenses(unittest.TestCase):
             cmd_projects(args)
         rows = json.loads(_printed(mp))
         self.assertAlmostEqual(rows[0]["net_spend"], 12000.0)
+
+
+class TestTripManualExpenses(unittest.TestCase):
+    """A one-time manual expense can belong to a trip and count in it."""
+
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        _create_test_db(self.db_path)
+        _seed_trips(self.db_path, [
+            ("Ledger Lisbon", "2025-07-01", "2025-07-10",
+             "personal", "Lisbon, Portugal"),
+        ])
+
+    def tearDown(self):
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    def _add_manual(self, **over):
+        defaults = dict(
+            description="Cash at the market", amount=40.0,
+            category="Groceries", date="2025-07-03", end=None,
+            frequency="one-time", trip=1, db_path=self.db_path)
+        defaults.update(over)
+        with patch("builtins.print"):
+            cmd_add_manual(_Args(**defaults))
+
+    def test_add_manual_links_trip(self):
+        self._add_manual()
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT description, trip_id, project_id FROM manual_expenses"
+        ).fetchone()
+        conn.close()
+        self.assertEqual(row, ("Cash at the market", 1, None))
+
+    def test_add_manual_rejects_missing_trip(self):
+        with patch("builtins.print"), self.assertRaises(SystemExit):
+            self._add_manual(trip=999)
+
+    def test_add_manual_rejects_recurring_trip_expense(self):
+        """A monthly template recurs for years; it has no single trip."""
+        with patch("builtins.print"), self.assertRaises(SystemExit):
+            self._add_manual(frequency="monthly")
+
+    def test_trips_total_matches_the_dashboard(self):
+        """Signed spending-view rows plus linked manual expenses: the
+        refund lowers the total, the card payment is not spending."""
+        _seed_transactions(self.db_path, [
+            ("2025-07-02", "HOTEL LEDGER", 300.0, "Lodging",
+             "Amex", "AGENT_VERIFIED", 0),
+            ("2025-07-04", "SHOP LEDGER REFUND", -20.0, "Shopping & Retail",
+             "Amex", "AGENT_VERIFIED", 0),
+            ("2025-07-05", "PAYMENT RECEIVED", -500.0, "CC Payment",
+             "Amex", "AGENT_VERIFIED", 0),
+        ])
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE transactions SET trip_id = 1")
+        conn.commit()
+        conn.close()
+        self._add_manual()
+
+        with patch("builtins.print") as mock_print:
+            cmd_trips(_Args(db_path=self.db_path, json_output=True))
+        (trip,) = json.loads(mock_print.call_args[0][0])
+        self.assertAlmostEqual(trip["total_spend"], 300.0 - 20.0 + 40.0)
+        self.assertEqual(trip["tx_count"], 3)
+        self.assertEqual(trip["manual_count"], 1)
 
 
 class TestAssignAndEditProject(unittest.TestCase):

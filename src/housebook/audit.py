@@ -201,15 +201,24 @@ def cmd_trips(args):
         f"SELECT COUNT(*) FROM trips t{where}", params
     ).fetchone()[0]
 
+    # total_spend is the trip's cost as the dashboard reports it: signed
+    # spending-view transactions (a refund lowers it, a card payment is
+    # not spending) plus linked manual expenses. tx_count still counts
+    # every assigned transaction, since it is assignment context.
     query = f"""
         SELECT t.id, t.name, t.start_date, t.end_date,
                t.type, t.location, t.status,
-               COUNT(tx.id) as tx_count,
-               COALESCE(SUM(ABS(tx.amount)), 0) as total_spend
+               (SELECT COUNT(*) FROM transactions tx
+                 WHERE tx.trip_id = t.id) AS tx_count,
+               (SELECT COUNT(*) FROM manual_expenses m
+                 WHERE m.trip_id = t.id) AS manual_count,
+               COALESCE((SELECT SUM(tx.amount) FROM transactions tx
+                          WHERE tx.trip_id = t.id
+                            AND {spend_filter('tx')}), 0)
+               + COALESCE((SELECT SUM(m.amount) FROM manual_expenses m
+                            WHERE m.trip_id = t.id), 0) AS total_spend
         FROM trips t
-        LEFT JOIN transactions tx ON tx.trip_id = t.id
         {where}
-        GROUP BY t.id
         ORDER BY t.start_date DESC
     """
     # --limit 0 (or --all, which sets limit to 0) disables the cap.
@@ -230,9 +239,12 @@ def cmd_trips(args):
                 f"  [{r['id']:>3}] {r['name']:<40} "
                 f"{r['start_date']} → {r['end_date']}"
             )
+            counts = f"{r['tx_count']} txns"
+            if r["manual_count"]:
+                counts += f" + {r['manual_count']} manual"
             print(
                 f"        {r['type']:<12} {r['location'] or 'N/A':<25} "
-                f"{r['tx_count']} txns  ${r['total_spend']:.2f}"
+                f"{counts}  ${r['total_spend']:,.2f}"
             )
 
         scope = " matching filter" if filtered else ""
@@ -1233,20 +1245,28 @@ def cmd_project_summary(args):
 
 
 def cmd_add_manual(args):
-    """Create a manual expense, optionally linked to a project.
+    """Create a manual expense, optionally linked to a project or trip.
 
     Manual expenses are off-ledger costs (cash/check craftsmanship, lump
-    material totals) kept out of the immutable source ledger. Defaults to
-    a one-time entry; pass --project to roll it into a project's total.
+    material totals, a transfer paid abroad) kept out of the immutable
+    source ledger. Defaults to a one-time entry. Pass --project or
+    --trip to roll it into that project's or trip's total.
     """
-    if args.project is not None:
+    if args.trip is not None and args.frequency != "one-time":
+        print("Error: --trip needs a one-time expense. A recurring "
+              "template has no single trip to belong to.")
+        sys.exit(1)
+    for table, label, ref in (("projects", "project", args.project),
+                              ("trips", "trip", args.trip)):
+        if ref is None:
+            continue
         conn = _connect(args.db_path)
         exists = conn.execute(
-            "SELECT 1 FROM projects WHERE id = ?", (args.project,)
+            f"SELECT 1 FROM {table} WHERE id = ?", (ref,)
         ).fetchone()
         conn.close()
         if not exists:
-            print(f"Error: no project with id {args.project}")
+            print(f"Error: no {label} with id {ref}")
             sys.exit(1)
 
     _backup(args.db_path)
@@ -1255,10 +1275,10 @@ def cmd_add_manual(args):
     cur.execute(
         """INSERT INTO manual_expenses
                (description, amount, category, start_date, end_date,
-                frequency, project_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                frequency, project_id, trip_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (args.description, args.amount, args.category, args.date,
-         args.end, args.frequency, args.project),
+         args.end, args.frequency, args.project, args.trip),
     )
     mid = cur.lastrowid
     conn.commit()
@@ -1266,9 +1286,12 @@ def cmd_add_manual(args):
 
     if args.json_output:
         print(json.dumps({"id": mid, "amount": args.amount,
-                          "project_id": args.project}))
+                          "project_id": args.project,
+                          "trip_id": args.trip}))
     else:
         tail = f" → project {args.project}" if args.project else ""
+        if args.trip:
+            tail += f" → trip {args.trip}"
         print(f"Added manual expense [{mid}]: {args.description} "
               f"${args.amount:,.2f} ({args.category}){tail}")
 
@@ -1423,6 +1446,7 @@ def main():
   project-summary  Per-project spend/budget report
   add-manual       Create a manual (off-ledger) expense, optionally
                    linked to a project (craftsmanship, lump totals)
+                   or a trip (cash or transfers paid while away)
 
 examples:
   housebook-audit pending
@@ -1687,6 +1711,9 @@ examples:
                       help="one-time (default), monthly, yearly")
     p_am.add_argument("--project", type=int, default=None,
                       help="Link to project ID (rolls into its total)")
+    p_am.add_argument("--trip", type=int, default=None,
+                      help="Link a one-time expense to trip ID "
+                           "(rolls into its total)")
 
     args = parser.parse_args()
 

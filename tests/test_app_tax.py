@@ -70,7 +70,8 @@ class TestAppTaxEndpoints(unittest.TestCase):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             description TEXT NOT NULL, amount REAL NOT NULL,
             category TEXT NOT NULL, start_date DATE NOT NULL,
-            end_date DATE, frequency TEXT NOT NULL DEFAULT 'one-time'
+            end_date DATE, frequency TEXT NOT NULL DEFAULT 'one-time',
+            project_id INTEGER, trip_id INTEGER
         )""")
         # Insert a test tax document
         c.execute(

@@ -57,6 +57,8 @@ housebook-audit create-trip "Name" --start YYYY-MM-DD --end YYYY-MM-DD \
     --type personal --location "Place"       # Create trip if needed
 housebook-audit verify <ids> --category "X"  # Batch-verify transactions
 housebook-audit verify <ids> --trip <id>     # Assign to trip
+housebook-audit add-manual "Cash tip" --amount 20 \
+    --category "Dining & Takeout" --date YYYY-MM-DD --trip <id>  # Off-statement trip cost
 housebook-audit summary                      # Post-audit report
 
 # 4b. Reconcile returns & cancellations (after audit)
@@ -243,11 +245,20 @@ the predicate again. It had been copied out by hand in nine places and
 the copies had already drifted (four omitted the zero-amount clause, so
 trip totals disagreed with the transaction lists that fed them).
 
-`core/dashboard.py` also owns the shared read model for `/api/data` and
-`/api/spending/data`: transaction filtering, recurring manual-expense
-expansion, categories, and trip summaries. Keep the HTTP handlers in
-`app.py` as parameter/status translation rather than duplicating that
-projection there.
+`core/dashboard.py` also owns the shared read model for `/api/data`,
+`/api/spending/data` and the trip page (`/api/spending/trip/{id}`):
+transaction filtering, recurring manual-expense expansion, categories,
+and trip summaries. Keep the HTTP handlers in `app.py` as
+parameter/status translation rather than duplicating that projection
+there.
+
+**A trip's cost** is its spending-view transactions plus the one-time
+manual expenses linked to it (`manual_expenses.trip_id`, migration
+025). The trip cards, the trip page and `housebook-audit trips` all
+sum exactly that. Before 2026-10 the trip page and the cards read
+transactions only, and `trips` summed `ABS(amount)` with no filter at
+all, so a refund *raised* its total. A recurring template never
+belongs to a trip; `add-manual --trip` refuses one.
 
 The spending views exclude transactions on four criteria:
 
@@ -634,3 +645,4 @@ We follow high-signal semantic commits with strict formatting for readability in
   categorize via direct `verify` (or `apply-rules --all`) rather than the
   default-windowed `apply-rules`.
 - **Trip assignment uses location, not just dates**: A transaction's date falling inside a trip window is necessary but not sufficient. Confirm the merchant location matches the destination (QC/ON for a Toronto trip, VA/NC for a Charlotte drive, foreign-city transit for an overseas trip). Per the mandatory work-trip rule, any charge assigned to a `work` trip must also be set to `Work (Reimbursable)`.
+- **Trip costs with no statement**: cash, a transfer paid abroad (a Brazilian PiX), or an installment billed on a statement that will not be imported go in as one-time manual expenses with `add-manual --trip <id>`. They then count in every trip total. Never hand-insert them into `transactions`.

@@ -135,7 +135,8 @@ features make such a partial import honest:
   of dropping the date check. It also requires `n/m` in the
   description, so parcels of one purchase stay distinct for the
   cross-statement duplicate check. A parcel billed after the import
-  window closes is recorded as a one-time manual expense instead.
+  window closes is recorded as a one-time manual expense on the
+  trip (`add-manual --trip`).
 
 ## Per-issuer quirks
 

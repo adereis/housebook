@@ -296,7 +296,8 @@ statement.
 - A purchase's total is the sum of its parcels. When a later parcel
   falls on a statement that will not be imported (the card's
   trip-only window has ended), record that parcel as a one-time
-  manual expense instead.
+  manual expense on the trip instead (`housebook-audit add-manual
+  ... --trip <id>`).
 
 ## Escalation rules — when to ASK rather than guess
 

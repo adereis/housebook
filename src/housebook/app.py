@@ -28,6 +28,7 @@ from housebook.core.dashboard import (
     DashboardQueryError,
     load_spending_dashboard,
     load_tax_documents,
+    load_trip_detail,
 )
 from housebook.core.database import Database, backup_database
 from housebook.core.intelligence import load_rules
@@ -35,12 +36,7 @@ from housebook.core.models import (
     CATEGORY_CC_PAYMENT,
     CATEGORY_TRANSFERS_REFUNDS,
 )
-from housebook.core.spending import spend_filter
 from housebook.migrations.runner import get_schema_version, run_migrations
-
-# The spending-view predicate, aliased for the `transactions t` joins
-# used throughout this file. One definition, seven former copies.
-SPEND_FILTER_T = spend_filter("t")
 
 _AUTH_DISABLED = "disabled"
 _AUTH_PROXY = "proxy"
@@ -482,48 +478,10 @@ async def trip_page(request: Request, trip_id: int):
 
 @app.get("/api/spending/trip/{trip_id}")
 async def get_trip_detail(trip_id: int):
-    conn = get_db_conn()
-    c = conn.cursor()
-
-    c.execute(
-        "SELECT id, name, start_date, end_date, "
-        "status, type, location "
-        "FROM trips WHERE id = ?",
-        (trip_id,),
-    )
-    trip_row = c.fetchone()
-    if not trip_row:
-        conn.close()
+    detail = load_trip_detail(DB_PATH, RULES_JSON, trip_id)
+    if detail is None:
         return {"error": "Trip not found"}
-    trip = dict(trip_row)
-
-    c.execute(f"""
-        SELECT t.id, t.date, t.category, t.description,
-               t.amount, t.source, t.needs_review
-        FROM transactions t
-        WHERE t.trip_id = ?
-          AND {SPEND_FILTER_T}
-        ORDER BY t.date ASC
-    """, (trip_id,))
-    transactions = [dict(row) for row in c.fetchall()]
-
-    categories = []
-    if os.path.exists(RULES_JSON):
-        with open(RULES_JSON, "r") as f:
-            rules_data = json.load(f)
-            categories = sorted(
-                [k for k in rules_data.keys()
-                     if k not in (CATEGORY_TRANSFERS_REFUNDS,
-                                  CATEGORY_CC_PAYMENT)]
-            )
-
-    conn.close()
-
-    return {
-        "trip": trip,
-        "transactions": transactions,
-        "categories": categories,
-    }
+    return detail
 
 
 @app.get("/tax", response_class=HTMLResponse)
