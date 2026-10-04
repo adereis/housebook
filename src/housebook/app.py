@@ -1,6 +1,7 @@
 import datetime
 import ipaddress
 import json
+import mimetypes
 import os
 import re
 import secrets
@@ -200,6 +201,12 @@ HELP_SECTIONS = [
     ("privacy", "Your data"),
 ]
 templates.env.globals["HELP_SECTIONS"] = HELP_SECTIONS
+# StaticFiles takes Content-Type from the mimetypes table, which the
+# host fills (/etc/mime.types, the Windows registry) over Python's
+# built-in map. Without a host table, Python before 3.12 says
+# application/javascript, and a Windows registry can say text/plain,
+# which browsers refuse for module scripts. Pin the RFC 9239 type.
+mimetypes.add_type("text/javascript", ".js")
 app.mount(
     "/static",
     StaticFiles(directory=os.path.join(PACKAGE_DIR, "static")),

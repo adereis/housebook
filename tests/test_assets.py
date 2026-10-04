@@ -1,4 +1,6 @@
 import re
+import subprocess
+import sys
 import unittest
 
 from fastapi.testclient import TestClient
@@ -45,6 +47,22 @@ class TestDashboardAssets(unittest.TestCase):
                 self.assertEqual(response.status_code, 200)
                 self.assertIn(content_type, response.headers["content-type"])
                 self.assertGreater(len(response.content), 100)
+
+    def test_javascript_type_does_not_depend_on_the_host(self):
+        """A host's own table decides .js unless the app pins it: a
+        bare container under Python 3.10 says application/javascript,
+        a Windows registry can say text/plain. Run in a subprocess so
+        the faked host table cannot leak into other tests."""
+        code = (
+            "import mimetypes\n"
+            "mimetypes.add_type('text/plain', '.js')\n"
+            "import housebook.app\n"
+            "print(mimetypes.guess_type('vendor.js')[0])\n"
+        )
+        result = subprocess.run([sys.executable, "-c", code],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "text/javascript")
 
 
 if __name__ == "__main__":
