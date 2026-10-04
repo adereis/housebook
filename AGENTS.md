@@ -527,7 +527,10 @@ We follow high-signal semantic commits with strict formatting for readability in
   `pip install -e '.[dev]'`. A local venv uses `--system-site-packages`,
   so a system package can hide an undeclared dependency; CI is where
   that surfaces. Lint and test tools belong in the `dev` extra, runtime
-  imports in `dependencies`.
+  imports in `dependencies`. The job runs in a Fedora container, with
+  the interpreters, git and rclone from Fedora RPMs. GitHub only hosts
+  Ubuntu VMs, so `runs-on` must name one, but nothing else may: install
+  CI tools with `dnf`, never `apt`.
 
 ### SOP Design Principles
 - **SOPs are living documents**: When a detection or audit session reveals a new heuristic (e.g., "Egencia bills from Scottsdale, AZ but that's not the trip destination"), add it to the relevant SOP immediately. The SOP captures operational judgment that code cannot.
