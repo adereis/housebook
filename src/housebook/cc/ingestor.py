@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 import os
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import List
 
 from housebook.config.settings import WORKSPACE_DIR
@@ -25,7 +25,14 @@ from housebook.core.ingestor import Ingestor
 from housebook.core.models import Transaction
 
 from .issuers import IssuerResolver
-from .schema import CcSchemaError, validate_data_block
+from .schema import (
+    BASE_CURRENCY,
+    CcSchemaError,
+    statement_currency,
+    validate_data_block,
+)
+
+CENT = Decimal("0.01")
 
 
 class CcIngestor(Ingestor):
@@ -93,6 +100,7 @@ class CcIngestor(Ingestor):
         # ("Acme-Home" vs "Acme Home") collapse to one DB `source`
         # instead of silently fragmenting a card's history.
         issuer = self._issuers.resolve(sc.data["issuer"])
+        currency = statement_currency(sc.data)
 
         rows_written: List[Transaction] = []
         # A single statement can legitimately list the same charge
@@ -107,7 +115,7 @@ class CcIngestor(Ingestor):
         seen_in_sidecar: dict[tuple, int] = {}
         for t in sc.data["transactions"]:
             desc = t.get("description", "")
-            amount = Decimal(str(t["amount"]))
+            amount, metadata = _ledger_amount(t, currency)
 
             key = (t["date"], desc, amount)
             occurrence = seen_in_sidecar.get(key, 0) + 1
@@ -137,10 +145,7 @@ class CcIngestor(Ingestor):
                 original_file=source_file_path,
                 profile=None,
                 needs_review=True,
-                metadata=(
-                    json.dumps(t["metadata"])
-                    if t.get("metadata") else None
-                ),
+                metadata=json.dumps(metadata) if metadata else None,
             )
             self.db.add_transaction(
                 tx,
@@ -225,3 +230,26 @@ class CcIngestor(Ingestor):
             print(message)
         else:
             pending.append(message)
+
+
+def _ledger_amount(t: dict, currency: str) -> tuple[Decimal, dict | None]:
+    """Return the USD amount the ledger stores, and the row's metadata.
+
+    Every `transactions.amount` is read as dollars, by every view and
+    total. A foreign statement's amount is divided by the row's
+    `fx_rate` (validated positive) and rounded to the cent. The printed
+    amount and the rate move into `metadata["fx"]`, so the conversion
+    can be traced and recomputed from the row alone. The dedup check
+    then compares dollars with dollars.
+    """
+    printed = Decimal(str(t["amount"]))
+    if currency == BASE_CURRENCY:
+        return printed, t.get("metadata") or None
+    metadata = dict(t["metadata"]) if t.get("metadata") else {}
+    rate = Decimal(str(t["fx_rate"]))
+    metadata["fx"] = {
+        "amount": float(printed),
+        "currency": currency,
+        "rate": float(rate),
+    }
+    return (printed / rate).quantize(CENT, rounding=ROUND_HALF_UP), metadata

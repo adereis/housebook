@@ -348,7 +348,8 @@ live here.
 - **Credit cards** — PDF statements → sidecars → `transactions`.
   Validators in `cc/schema.py` guard against year-inference bugs.
   The CC ingestor does **not** categorize (see *Spending View
-  Filters* below for the `CC Payment` consequence).
+  Filters* below for the `CC Payment` consequence). Every ledger
+  amount is dollars: a foreign statement is converted at ingest.
 - **Amazon** — already-structured CSV exports are the **source of
   truth**; the bank card that mirrors them is normally not ingested.
   Four CSVs ingested per profile; Order ID persisted in metadata.

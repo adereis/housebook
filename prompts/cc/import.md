@@ -209,6 +209,37 @@ Destination: `$WORKSPACE/cc/<YYYY>/` where YYYY = end_year.
 - `tx_count_db` and `tx_total_db`: set when DB-assisted (for
   reconciliation). Null for from-scratch mode.
 
+## Foreign-currency statements
+
+The ledger has no currency column. Every view and total reads
+`transactions.amount` as US dollars. So a statement billed in another
+currency must say so, or an R$ 80,00 dinner lands as $80.00.
+
+- Set `data.currency` to the ISO 4217 code (`"BRL"`). Omit it on a
+  dollar statement.
+- Keep `amount`, `balances` and `tx_total_db` as printed, in that
+  currency. Pre-flight check 5 then still holds to the cent.
+- Give every transaction an `fx_rate`. It is units of the statement
+  currency per 1 USD on the transaction's date. The ingestor stores
+  `amount / fx_rate`, rounded to the cent, and keeps the printed
+  amount and the rate in `metadata.fx`.
+- Set `data.fx_source` to one line naming the rate, e.g. `"BCB PTAX
+  selling rate on the purchase date (previous business day when the
+  market was closed)"`.
+
+For BRL, use the Banco Central do Brasil PTAX selling rate
+(`cotacaoVenda`). One request returns a whole range, and it sends
+nothing but the dates (written `MM-DD-YYYY`):
+
+```bash
+curl -sS "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata/CotacaoDolarPeriodo(dataInicial=@dataInicial,dataFinalCotacao=@dataFinalCotacao)?@dataInicial='01-02-2025'&@dataFinalCotacao='03-31-2025'&\$top=500&\$format=json&\$select=cotacaoVenda,dataHoraCotacao"
+```
+
+PTAX has no rate on weekends and Brazilian holidays. Use the most
+recent earlier business day's rate for those dates. Start the range a
+week before the earliest transaction, so a Monday-holiday purchase
+still finds a rate.
+
 ## Escalation rules — when to ASK rather than guess
 
 | Condition | Why |

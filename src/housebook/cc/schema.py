@@ -20,6 +20,8 @@ catches that case immediately. Other checks in the same spirit:
   - account.last4 is exactly 4 digits or null
   - issuer is non-empty
   - sums of transaction amounts roughly match tx_total_db
+  - a foreign-currency statement names its rate source and gives
+    every transaction a positive fx_rate
 """
 
 from __future__ import annotations
@@ -28,6 +30,12 @@ import re
 from datetime import date, datetime, timedelta
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+
+# The ledger has no currency column: every `transactions.amount` is
+# read as US dollars. A sidecar that omits `currency` is a USD
+# statement; any other currency is converted at ingest.
+BASE_CURRENCY = "USD"
 
 # Permissive bounds. Most billing cycles are 28-32 days; we allow
 # 20-40 to handle short-month boundaries, mid-cycle account opens,
@@ -49,6 +57,11 @@ SUM_TOLERANCE = 0.10
 
 class CcSchemaError(ValueError):
     """Raised when a CC sidecar's data block fails validation."""
+
+
+def statement_currency(data: dict) -> str:
+    """Return the currency the statement's amounts are printed in."""
+    return data.get("currency", BASE_CURRENCY)
 
 
 def _parse_date(s: str, field: str) -> date:
@@ -177,6 +190,8 @@ def validate_data_block(data: dict, issuer_resolver=None) -> list[str]:
         if not isinstance(t.get("description", ""), str):
             errors.append(f"transactions[{i}].description must be string")
 
+    errors.extend(_currency_errors(data, txs))
+
     # ── reconciliation: tx_count_db and tx_total_db ──────────────
     tx_count_db = data.get("tx_count_db")
     if tx_count_db is not None:
@@ -207,4 +222,52 @@ def validate_data_block(data: dict, issuer_resolver=None) -> list[str]:
                     f"difference exceeds ${SUM_TOLERANCE:.2f} tolerance"
                 )
 
+    return errors
+
+
+def _currency_errors(data: dict, txs: list) -> list[str]:
+    """Check that a foreign statement carries what its conversion needs.
+
+    The statement's own amounts stay as printed, so its totals and
+    balances still check in that currency. Each row carries the rate
+    the ingestor divides by, and `fx_source` says where the rates came
+    from, so a converted amount can always be traced and recomputed.
+    """
+    errors: list[str] = []
+    currency = statement_currency(data)
+    if not (isinstance(currency, str) and CURRENCY_RE.match(currency)):
+        return [
+            f"currency must be a 3-letter ISO 4217 code such as 'BRL'; "
+            f"got {currency!r}"
+        ]
+
+    rows = [(i, t) for i, t in enumerate(txs) if isinstance(t, dict)]
+    if currency == BASE_CURRENCY:
+        return [
+            f"transactions[{i}].fx_rate is set, but the statement is "
+            f"in {BASE_CURRENCY} and needs no conversion"
+            for i, t in rows if "fx_rate" in t
+        ]
+
+    fx_source = data.get("fx_source")
+    if not isinstance(fx_source, str) or not fx_source.strip():
+        errors.append(
+            f"fx_source must name where the {currency} rates came from; "
+            f"a {currency} statement is converted to {BASE_CURRENCY} "
+            "at ingest"
+        )
+    for i, t in rows:
+        rate = t.get("fx_rate")
+        if (isinstance(rate, bool) or not isinstance(rate, (int, float))
+                or rate <= 0):
+            errors.append(
+                f"transactions[{i}].fx_rate must be a positive number "
+                f"of {currency} per 1 {BASE_CURRENCY}; got {rate!r}"
+            )
+        metadata = t.get("metadata")
+        if metadata is not None and not isinstance(metadata, dict):
+            errors.append(
+                f"transactions[{i}].metadata must be an object or null "
+                "so the conversion can be recorded in it"
+            )
     return errors

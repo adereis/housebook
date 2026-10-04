@@ -145,6 +145,63 @@ class TestCcSchemaValidation(unittest.TestCase):
         self.assertEqual(errs, [])
 
 
+    # ── foreign currency ─────────────────────────────────────
+
+    def _foreign_data(self):
+        data = self._make_valid_data()
+        data["currency"] = "BRL"
+        data["fx_source"] = "Test central bank, purchase-date rate"
+        data["transactions"][0]["fx_rate"] = 4.0
+        return data
+
+    def test_foreign_statement_with_rates_passes(self):
+        self.assertEqual(validate_data_block(self._foreign_data()), [])
+
+    def test_foreign_statement_without_rate_source_rejected(self):
+        data = self._foreign_data()
+        del data["fx_source"]
+        errs = validate_data_block(data)
+        self.assertTrue(any("fx_source" in e for e in errs))
+
+    def test_foreign_row_without_valid_rate_rejected(self):
+        """A missing, zero, negative or boolean rate cannot convert."""
+        for bad in (None, 0, -4.0, True, "4.0"):
+            data = self._foreign_data()
+            if bad is None:
+                del data["transactions"][0]["fx_rate"]
+            else:
+                data["transactions"][0]["fx_rate"] = bad
+            errs = validate_data_block(data)
+            self.assertTrue(
+                any("fx_rate" in e for e in errs), f"accepted {bad!r}",
+            )
+
+    def test_foreign_row_with_non_object_metadata_rejected(self):
+        """The conversion is recorded inside metadata, so it must be
+        an object."""
+        data = self._foreign_data()
+        data["transactions"][0]["metadata"] = ["not", "an", "object"]
+        errs = validate_data_block(data)
+        self.assertTrue(any("metadata" in e for e in errs))
+
+    def test_rate_on_usd_statement_rejected(self):
+        """A rate on a dollar statement would be silently ignored, so
+        it signals a sidecar that forgot its `currency`."""
+        data = self._make_valid_data()
+        data["transactions"][0]["fx_rate"] = 4.0
+        errs = validate_data_block(data)
+        self.assertTrue(any("fx_rate" in e for e in errs))
+
+    def test_malformed_currency_code_rejected(self):
+        for bad in ("brl", "R$", "", 986):
+            data = self._foreign_data()
+            data["currency"] = bad
+            errs = validate_data_block(data)
+            self.assertTrue(
+                any("currency" in e for e in errs), f"accepted {bad!r}",
+            )
+
+
 # ── Issuer resolver tests ──────────────────────────────────────
 
 
@@ -466,6 +523,78 @@ class TestCcIngestor(unittest.TestCase):
         result = ing.ingest_directory(self.tmpdir)
         self.assertEqual(result["rows_written"], 1)
         self.assertEqual(result["duplicate_rows_skipped"], 1)
+
+    def _foreign_data(self, rows):
+        data = self._valid_data()
+        data["currency"] = "BRL"
+        data["fx_source"] = "Test central bank, purchase-date rate"
+        data["transactions"] = [
+            {
+                "date": "2025-03-14", "description": desc,
+                "amount": amount, "fx_rate": rate,
+                "category": None, "metadata": metadata, "page": None,
+            }
+            for desc, amount, rate, metadata in rows
+        ]
+        data["tx_count_db"] = len(rows)
+        data["tx_total_db"] = round(sum(r[1] for r in rows), 2)
+        return data
+
+    def _rows(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT description, amount, metadata FROM transactions "
+            "ORDER BY id"
+        ).fetchall()
+        conn.close()
+        return rows
+
+    def test_foreign_amount_is_converted_and_traceable(self):
+        """The ledger reads every amount as dollars, so a BRL row is
+        stored converted. The printed amount and rate stay in metadata,
+        alongside whatever metadata the row already had."""
+        ing = self._make_ingestor()
+        data = self._foreign_data([
+            ("PADARIA LEDGER", 50.00, 4.0, {"card_last4": "0000"}),
+        ])
+        ing.ingest_sidecar(self._write_sidecar("brl", data))
+
+        (row,) = self._rows()
+        self.assertAlmostEqual(row["amount"], 12.50)
+        self.assertEqual(json.loads(row["metadata"]), {
+            "card_last4": "0000",
+            "fx": {"amount": 50.0, "currency": "BRL", "rate": 4.0},
+        })
+
+    def test_foreign_conversion_rounds_half_up_and_keeps_sign(self):
+        ing = self._make_ingestor()
+        data = self._foreign_data([
+            ("FEIRA LEDGER", 0.25, 2.0, None),       # 0.125 → 0.13
+            ("PAGAMENTO LEDGER", -0.25, 2.0, None),  # -0.125 → -0.13
+            ("SORVETE LEDGER", 10.00, 3.0, None),    # 3.333 → 3.33
+        ])
+        ing.ingest_sidecar(self._write_sidecar("brl", data))
+        self.assertEqual(
+            [r["amount"] for r in self._rows()], [0.13, -0.13, 3.33],
+        )
+
+    def test_foreign_reingest_dedups_on_converted_amount(self):
+        """The duplicate check compares against stored dollars. Had it
+        used the printed reais, a repair re-ingest would miss the
+        existing row and insert the charge a second time."""
+        ing = self._make_ingestor()
+        data = self._foreign_data([("PADARIA LEDGER", 50.00, 4.0, None)])
+        jp = self._write_sidecar("brl", data)
+        ing.ingest_sidecar(jp)
+
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("DELETE FROM processed_files")
+        conn.commit()
+        conn.close()
+
+        self.assertEqual(ing.ingest_sidecar(jp), [])
+        self.assertEqual(len(self._rows()), 1)
 
     def test_invalid_sidecar_raises(self):
         ing = self._make_ingestor()

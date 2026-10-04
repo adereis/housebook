@@ -54,6 +54,8 @@ array inside the v1 envelope. Key fields in the `data` block:
   metadata, page}`
 - `tx_count_db`, `tx_total_db` — reconciliation fields (set during
   DB-assisted import; null for from-scratch mode)
+- `currency` (optional, ISO 4217, default `USD`), `fx_source`, and
+  `transactions[].fx_rate` — see *Foreign-currency statements*
 
 One sidecar is one database transaction: every transaction row,
 provenance field, and the `processed_files` marker commits together.
@@ -74,10 +76,36 @@ found during the bulk-import pass:
 | Tx dates within `[start-14d, end+14d]` | Year-off-by-1 on individual transactions |
 | `tx_count_db == len(transactions)` | Internal logic bugs in import |
 | `sum(amounts) ≈ tx_total_db` | Amount-drift from rounding or missing rows |
+| Non-USD: `fx_source` set, every row has a positive `fx_rate` | A foreign statement landing in the ledger unconverted |
+| USD: no row has an `fx_rate` | A sidecar that forgot its `currency` |
 
 The 14-day grace handles real-world posting lag (car rentals, hotels,
 international merchants). Year-inference bugs are 330+ days off —
 well outside the grace.
+
+## Foreign-currency statements
+
+The ledger has no currency column, and every view and total sums
+`transactions.amount` as dollars. A foreign statement is therefore
+converted **at ingest**, not stored in its own currency. Added
+2026-10, first for a card billed in Brazilian reais.
+
+- The sidecar keeps the statement's own amounts and balances, so the
+  import SOP's balance check still holds in that currency.
+- Each row carries the `fx_rate` the agent looked up at import. The
+  ingestor only divides and rounds half-up to the cent, so ingest
+  stays offline and a re-ingest reproduces the same dollars.
+- The row's `metadata.fx` keeps `{amount, currency, rate}`, so the
+  conversion can be recomputed from the row alone. The web UI's
+  transaction details show it.
+- The duplicate check runs on the converted dollars, because that is
+  what the DB holds.
+
+A `currency` column was rejected. Every spending query, trip total and
+project total would have had to convert, and a single forgotten
+conversion would silently add reais to dollars. Converting once, at
+the boundary, keeps every consumer unchanged. `prompts/cc/import.md`
+says where the BRL rate comes from (Banco Central do Brasil PTAX).
 
 ## Per-issuer quirks
 
