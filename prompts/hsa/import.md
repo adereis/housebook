@@ -35,8 +35,9 @@ List all files at the path provided by the user. Group them by
 apparent source:
 
 - **Insurance EOB bulk export**: A folder containing `contents.pdf`,
-  `contents (1).pdf`, ..., plus a `Claim_Summary_*.csv`. These are
-  one-EOB-per-PDF, reverse-indexed to the CSV rows.
+  `contents (1).pdf`, ..., plus a `Claim_Summary_*.csv`. Each PDF is
+  one EOB. Identify each one from its own text, never from its
+  position (Step 5).
 - **Provider receipts/bills**: Individual PDFs from hospitals,
   dental offices, pharmacies, labs, etc.
 - **HSA custodian statements**: HSA account statements or tax forms.
@@ -179,6 +180,12 @@ Extract financials from the PDF text. Look for these patterns:
 - "What I owe" → `financials.patient_responsibility`
 - "Claim #" → `claim_id`
 
+When the claim detail ends with a Total row, read the financials
+from it, and check that copay + deductible + coinsurance equals the
+amount owed. An amount marked not covered that the patient does not
+owe (a network write-off) is not part of `amount`; mention it in
+`classifier_notes`.
+
 ```json
 {
   "date": "2025-03-11",
@@ -268,22 +275,28 @@ and `entity`.
 
 ## Step 5: Handle Insurance Bulk EOB Exports
 
-Some insurers provide EOBs as a bulk download with a specific
-structure:
+Some insurer portals offer a bulk download: a folder of identically
+named PDFs (`contents.pdf`, `contents (1).pdf`, ...) plus a
+`Claim_Summary_*.csv` with columns such as `Service Date`,
+`Provider`, and `Patient Responsibility`. Prefer downloading each EOB
+individually (`prompts/hsa/acquire.md`). When a bulk export is what
+you have:
 
-1. A folder containing `Claim_Summary_*.csv` and multiple
-   `contents.pdf`, `contents (1).pdf`, ... files.
-2. The CSV has columns: `Service Date`, `Provider`,
-   `Patient Responsibility`, etc.
-3. **Critical**: The PDFs are reverse-indexed to CSV rows.
-   `contents.pdf` → last CSV row, `contents (1).pdf` →
-   second-to-last row, and so on.
-
-Process:
-1. Parse the CSV to get claim metadata
-2. Match each PDF to its CSV row using reverse indexing
-3. Rename and generate sidecars per the standard format
-4. Delete the CSV and empty source folder after processing
+1. **Read every field from each PDF's own text**: claim number,
+   patient, service date, provider, amount owed, and financials. The
+   PDF is the document an auditor will see, so its sidecar must
+   describe that PDF.
+2. **Never pair PDFs with CSV rows by position.** Download order is
+   not a contract, and one missing or extra file shifts every pairing
+   after it. An earlier import paired them by reverse order and filed
+   19 EOBs under a neighboring claim's date and provider. The amounts
+   still matched the PDFs, which hid the error for months.
+3. **Use the CSV only as a cross-check.** Find each PDF's row by claim
+   number, or by patient + service date + amount when the CSV has no
+   claim numbers. A PDF with no row, or a row with no PDF, is an
+   escalation (Step 6), not a gap to fill.
+4. Rename and write sidecars per the standard format, then delete the
+   CSV and the emptied source folder.
 
 ## Step 6: Escalation rules — when to ASK rather than guess
 
@@ -313,6 +326,18 @@ screenshots, marketing PDFs) should be skipped and reported to the
 user. Do not move or delete them from the source location.
 
 ## Step 8: STOP. Do not ingest.
+
+**Self-audit EOBs first.** For every EOB sidecar written in this
+pass, re-read its PDF and compare the claim number, patient, service
+date, amount owed, and provider with the sidecar and the filename:
+
+```bash
+pdftotext -layout <file>.pdf - | grep -E 'Claim # |services on|services provided by|What I owe'
+```
+
+Fix any mismatch before presenting the summary. The check is cheap,
+and it is the only one that catches a file filed under the wrong
+claim.
 
 Present a summary in conversation listing what was imported (filename,
 type, provider, patient, amount) and any files that were skipped or
