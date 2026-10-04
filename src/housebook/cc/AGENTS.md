@@ -9,7 +9,7 @@ new statements go through the same flow.
 | DB table | `transactions` (shared with Amazon) |
 | Workspace dir | `cc/{2024,2025,2026}/` (year dirs); `cc/_inbox/` (raw acquired PDFs, transient) |
 | Config | `config/cc/issuers.json` |
-| Acquire SOP | `prompts/cc/acquire.md` (browser-drive, Phase 0) |
+| Acquire SOP | `prompts/acquire.md` (shared browser-drive) + `prompts/cc/acquire.md` (Phase 0) |
 | Import SOP | `prompts/cc/import.md` |
 | CLI | `housebook-cc` |
 | Web route | `/spending` |
@@ -19,7 +19,8 @@ new statements go through the same flow.
 ```
 # Phase 0 (optional): Acquire new statements — user-initiated, attended
 # Agent drives the user's Chrome (claude-in-chrome) to download missing
-# statement PDFs into cc/_inbox/ (prompts/cc/acquire.md).
+# statement PDFs into cc/_inbox/ (prompts/acquire.md, then
+# prompts/cc/acquire.md).
 # Output is a raw PDF only; it then enters Phase 1 unchanged.
 
 # Phase 1: Import new statements

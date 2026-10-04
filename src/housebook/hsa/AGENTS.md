@@ -9,7 +9,7 @@ different CLI.
 | Aspect | Expenses | Tax | HSA Shoebox |
 |--------|----------|-----|-------------|
 | DB tables | `transactions` | `tax_documents` | `hsa_expenses`, `hsa_documents`, `hsa_providers`, `hsa_audit_log` |
-| Workspace dir | `cc/YYYY/`, `amazon/<profile>/` | `tax/YYYY/` | `hsa/YYYY/` (envelope-wrapped sidecars + source files) |
+| Workspace dir | `cc/YYYY/`, `amazon/<profile>/` | `tax/YYYY/` | `hsa/YYYY/` (envelope-wrapped sidecars + source files); `hsa/_inbox/` (raw acquired EOBs, transient) |
 | CLI | `housebook-audit` | `housebook-tax` | `housebook-hsa` |
 | Web route | `/spending` | `/tax` | `/hsa` |
 
@@ -102,7 +102,10 @@ first.
 Both the ingest walk and that validation skip `Reimbursements/` and
 any `_trash/` directory. To retire a file, such as a duplicate
 download of a claim already on file, move it and its sidecar to
-`hsa/_trash/` and remove its `hsa_documents` row.
+`hsa/_trash/` and remove its `hsa_documents` row. Raw PDFs waiting
+in `hsa/_inbox/` (see `prompts/hsa/acquire.md`) are not skipped:
+until the import SOP files them, each one reports as a missing
+sidecar.
 
 ## Agent workflow for HSA
 
@@ -114,6 +117,11 @@ review gate**: import (AI agent judgment) → STOP → user approval
 separate, infrequent, user-triggered operation.
 
 ```
+# Phase 0 (optional): Acquire insurer EOBs — user-initiated, attended
+# Agent drives the user's Chrome to download missing EOB PDFs into
+# hsa/_inbox/ (prompts/acquire.md, then prompts/hsa/acquire.md).
+# Dedup by claim number; every file checked against its claim row.
+
 # Phase 1: Import raw documents (AI agent follows SOP)
 # User provides file path(s); agent follows prompts/hsa/import.md:
 #   - Read each file via pdftotext / OCR

@@ -33,6 +33,9 @@ housebook-sync push --dry-run  # Preview before pushing
 housebook-ingest list --latest          # Latest file per source
 housebook-ingest list --source Amex     # One source in detail
 housebook-ingest list                   # All files with gap detection
+# Missing documents? Fetch them by driving the user's browser —
+# attended and user-initiated only (prompts/acquire.md, then the
+# source's acquire SOP). Files land in $WORKSPACE/<source>/_inbox/.
 
 # 3. Import + ingest (see prompts/import.md for the unified SOP)
 # User provides files from any path (e.g., ~/Downloads)
@@ -277,12 +280,12 @@ This root file is the always-loaded router: cross-cutting concerns
 (the audit lifecycle, spending-view filters, trip detection, sync)
 live here.
 
-| Source | Module doc | CLI | Import SOP |
-|--------|-----------|-----|------------|
-| Credit cards | [`src/housebook/cc/AGENTS.md`](src/housebook/cc/AGENTS.md) | `housebook-cc` | `prompts/cc/import.md` |
-| Amazon | [`src/housebook/amazon/AGENTS.md`](src/housebook/amazon/AGENTS.md) | `housebook-amazon` | (deterministic; no AI import) |
-| Tax | [`src/housebook/tax/AGENTS.md`](src/housebook/tax/AGENTS.md) | `housebook-tax` | `prompts/tax/import.md` |
-| HSA Shoebox | [`src/housebook/hsa/AGENTS.md`](src/housebook/hsa/AGENTS.md) | `housebook-hsa` | `prompts/hsa/import.md` |
+| Source | Module doc | CLI | Import SOP | Acquire SOP |
+|--------|-----------|-----|------------|-------------|
+| Credit cards | [`src/housebook/cc/AGENTS.md`](src/housebook/cc/AGENTS.md) | `housebook-cc` | `prompts/cc/import.md` | `prompts/cc/acquire.md` |
+| Amazon | [`src/housebook/amazon/AGENTS.md`](src/housebook/amazon/AGENTS.md) | `housebook-amazon` | (deterministic; no AI import) | — |
+| Tax | [`src/housebook/tax/AGENTS.md`](src/housebook/tax/AGENTS.md) | `housebook-tax` | `prompts/tax/import.md` | — |
+| HSA Shoebox | [`src/housebook/hsa/AGENTS.md`](src/housebook/hsa/AGENTS.md) | `housebook-hsa` | `prompts/hsa/import.md` | `prompts/hsa/acquire.md` |
 
 - **Credit cards** — PDF statements → sidecars → `transactions`.
   Validators in `cc/schema.py` guard against year-inference bugs.
@@ -308,10 +311,12 @@ import→ingest pattern:
 $WORKSPACE/<source>/
   YYYY/ or      ← imported files + envelope sidecars
   <profile>/       (Amazon uses profile dirs instead of year dirs)
+  _inbox/       ← raw acquired files awaiting import (cc, hsa)
 
 $WORKSPACE/config/<source>/...      ← LIVE per-source config (NOT in repo)
 prompts/<source>/...                ← per-source SOPs (import, audit, …)
 prompts/import.md                   ← unified entry point
+prompts/acquire.md                  ← shared browser-drive acquisition (Phase 0)
 prompts/reingest.md                 ← repair/re-ingest runbook (correcting historical data)
 src/housebook/<source>/AGENTS.md   ← per-source module doc (content; read by Codex, Gemini et al.)
 src/housebook/<source>/CLAUDE.md   ← one-line `@AGENTS.md` stub (Claude auto-loads on-demand)
