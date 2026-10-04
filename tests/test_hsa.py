@@ -1045,6 +1045,46 @@ class TestHsaCli(unittest.TestCase):
         self.assertIn(f"id={live_id} ", flagged)
         self.assertNotIn(f"id={deleted_id} ", flagged)
 
+    def test_check_flags_orphaned_documents(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from housebook.hsa.cli import cmd_check
+
+        # A hard-deleted expense leaves its documents pointing at nothing:
+        # the evidence survives while the ledger forgets the service. A
+        # document with no expense on purpose (a $0 EOB, an account
+        # statement) is not an orphan.
+        conn = sqlite3.connect(self.db_path)
+        missing = conn.execute(
+            "SELECT COALESCE(MAX(id), 0) + 100 FROM hsa_expenses"
+        ).fetchone()[0]
+        for expense_id, name in ((missing, "orphan.pdf"), (None, "account.pdf")):
+            conn.execute(
+                "INSERT INTO hsa_documents "
+                "(expense_id, document_type, file_path, file_hash) "
+                "VALUES (?, 'eob', ?, 'abc123')",
+                (expense_id, f"hsa/2025/{name}"),
+            )
+        conn.commit()
+        conn.close()
+
+        args = type("Args", (), {
+            "db_path": self.db_path, "json_output": True,
+            "verify_hashes": False,
+        })()
+        f = io.StringIO()
+        with redirect_stdout(f):
+            cmd_check(args)
+        flagged = [
+            i for i in json.loads(f.getvalue())["issues"]
+            if i["type"] == "orphaned_document"
+        ]
+        self.assertEqual(len(flagged), 1)
+        self.assertEqual(flagged[0]["severity"], "error")
+        self.assertIn("orphan.pdf", flagged[0]["message"])
+        self.assertIn(f"expense {missing}", flagged[0]["message"])
+
     def test_summary_json_output(self):
         import io
         from contextlib import redirect_stdout

@@ -258,6 +258,13 @@ reporting a `hash_mismatch` error for any document whose content
 changed. Re-hashing is IO-bound, so it is opt-in rather than part of
 the routine check — run it before assembling a reimbursement packet.
 
+`check` also reports an `orphaned_document` error for a document
+whose expense row no longer exists. The CLI only soft-deletes, so an
+orphan means someone deleted an expense with raw SQL: the evidence
+survived and the ledger lost the service. Never delete `hsa_expenses`
+rows directly; use `housebook-hsa delete`, or `merge`, which moves
+the documents to the surviving row.
+
 All field-level changes to `hsa_expenses` are logged in
 `hsa_audit_log` with who/what/when/why for IRS defense. Guards run
 **before** any write, so a blocked `verify` leaves no audit-log

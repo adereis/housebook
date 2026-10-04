@@ -371,6 +371,29 @@ def cmd_check(args):
             }
         )
 
+    # Documents whose expense row no longer exists. Only a hard delete
+    # (never the CLI's soft delete) leaves one, and it means the ledger
+    # lost a service while its evidence survived. Documents with no
+    # expense on purpose ($0 EOBs, account-level files) are not orphans.
+    orphaned = conn.execute("""
+        SELECT d.id, d.expense_id, d.file_path
+        FROM hsa_documents d
+        LEFT JOIN hsa_expenses e ON e.id = d.expense_id
+        WHERE d.expense_id IS NOT NULL AND e.id IS NULL
+    """).fetchall()
+
+    for o in orphaned:
+        issues.append(
+            {
+                "type": "orphaned_document",
+                "severity": "error",
+                "message": (
+                    f"Orphaned document: doc_id={o['id']} points at missing "
+                    f"expense {o['expense_id']}: {o['file_path']}"
+                ),
+            }
+        )
+
     # CC stubs without receipts (the whole point of stubs)
     stubs_no_docs = conn.execute("""
         SELECT COUNT(*) AS cnt FROM hsa_expenses
