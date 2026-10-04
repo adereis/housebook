@@ -13,21 +13,24 @@ both ends — producing `start > end`. The check `start <= end`
 catches that case immediately. Other checks in the same spirit:
 
   - statement_period span between 20 and 40 days (typical billing cycles)
-  - all transactions within [start - 5d, end + 5d] (5d grace for
-    posting lag — real CC data has tx dates 1-2 days before period
-    start; tightening past 5 days produces false positives)
+  - all transactions within [start - 14d, end + 14d] (grace for
+    posting lag; an installment parcel also gets one billing cycle
+    per earlier parcel, since every parcel keeps the purchase date)
   - tx_count_db, tx_total_db consistent with the transactions array
   - account.last4 is exactly 4 digits or null
   - issuer is non-empty
   - sums of transaction amounts roughly match tx_total_db
   - a foreign-currency statement names its rate source and gives
     every transaction a positive fx_rate
+  - every excluded line has a reason, and imported + excluded lines
+    sum to closing - opening balance
 """
 
 from __future__ import annotations
 
 import re
 from datetime import date, datetime, timedelta
+from decimal import Decimal
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
@@ -54,9 +57,19 @@ TX_DATE_GRACE_DAYS = 14
 # across the whole statement to absorb rounding noise.
 SUM_TOLERANCE = 0.10
 
+CENT = Decimal("0.01")
+
 
 class CcSchemaError(ValueError):
     """Raised when a CC sidecar's data block fails validation."""
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def statement_currency(data: dict) -> str:
@@ -155,40 +168,17 @@ def validate_data_block(data: dict, issuer_resolver=None) -> list[str]:
     if not isinstance(txs, list):
         errors.append("transactions must be a list")
         txs = []
+    errors.extend(_row_errors(txs, "transactions", start, end))
 
-    if start and end and txs:
-        early = start - timedelta(days=TX_DATE_GRACE_DAYS)
-        late = end + timedelta(days=TX_DATE_GRACE_DAYS)
-        for i, t in enumerate(txs):
-            if not isinstance(t, dict):
-                # Reported by the type-check loop below; a non-dict here
-                # must not abort the whole batch with an AttributeError.
-                continue
-            try:
-                d = _parse_date(t.get("date", ""), f"transactions[{i}].date")
-            except CcSchemaError as e:
-                errors.append(str(e))
-                continue
-            if d < early or d > late:
-                errors.append(
-                    f"transactions[{i}].date {d} is outside "
-                    f"[{early}, {late}] (period {start} to {end} "
-                    f"with {TX_DATE_GRACE_DAYS}-day grace) — "
-                    f"description={t.get('description')!r}"
-                )
-
-    for i, t in enumerate(txs):
-        if not isinstance(t, dict):
-            errors.append(f"transactions[{i}] must be an object")
-            continue
-        if "amount" not in t or not isinstance(
-            t["amount"], (int, float)
-        ):
-            errors.append(
-                f"transactions[{i}].amount must be numeric"
-            )
-        if not isinstance(t.get("description", ""), str):
-            errors.append(f"transactions[{i}].description must be string")
+    # Rows the statement prints but the import deliberately leaves out.
+    excluded = data.get("excluded_transactions", [])
+    if not isinstance(excluded, list):
+        errors.append("excluded_transactions must be a list")
+        excluded = []
+    errors.extend(
+        _row_errors(excluded, "excluded_transactions", start, end)
+    )
+    errors.extend(_excluded_errors(data, txs, excluded))
 
     errors.extend(_currency_errors(data, txs))
 
@@ -270,4 +260,148 @@ def _currency_errors(data: dict, txs: list) -> list[str]:
                 f"transactions[{i}].metadata must be an object or null "
                 "so the conversion can be recorded in it"
             )
+    return errors
+
+
+def _row_errors(rows: list, field: str, start, end) -> list[str]:
+    """Check each row's shape, installment marker and date window.
+
+    `transactions` and `excluded_transactions` share these checks: an
+    excluded row is still a statement line, and a mis-dated one is
+    the same extraction bug wherever it is filed.
+    """
+    errors: list[str] = []
+    for i, t in enumerate(rows):
+        where = f"{field}[{i}]"
+        if not isinstance(t, dict):
+            errors.append(f"{where} must be an object")
+            continue
+        if "amount" not in t or not isinstance(t["amount"], (int, float)):
+            errors.append(f"{where}.amount must be numeric")
+        if not isinstance(t.get("description", ""), str):
+            errors.append(f"{where}.description must be string")
+        installment_errors, earlier_cycles = _installment(t, where)
+        errors.extend(installment_errors)
+
+        if not (start and end):
+            continue
+        try:
+            d = _parse_date(t.get("date", ""), f"{where}.date")
+        except CcSchemaError as e:
+            errors.append(str(e))
+            continue
+        early = start - timedelta(
+            days=TX_DATE_GRACE_DAYS + earlier_cycles * MAX_PERIOD_DAYS
+        )
+        late = end + timedelta(days=TX_DATE_GRACE_DAYS)
+        if d < early or d > late:
+            allowance = f"{TX_DATE_GRACE_DAYS}-day grace"
+            if earlier_cycles:
+                allowance += f" + {earlier_cycles} earlier billing cycle(s)"
+            errors.append(
+                f"{where}.date {d} is outside [{early}, {late}] "
+                f"(period {start} to {end} with {allowance}) — "
+                f"description={t.get('description')!r}"
+            )
+    return errors
+
+
+def _installment(t: dict, where: str) -> tuple[list[str], int]:
+    """Validate an installment marker. Return (errors, earlier cycles).
+
+    Brazilian cards split a purchase into parcels, one per statement,
+    and every parcel keeps the purchase date. Parcel n of m is billed
+    n - 1 cycles after the purchase, so its date may sit that many
+    cycles before the statement opens.
+
+    The description must carry "n/m". Parcels of one purchase share
+    its date and often its amount, so without the marker the
+    cross-statement duplicate check would take parcel 2 for a repeat
+    of parcel 1 and drop it.
+    """
+    inst = t.get("installment")
+    if inst is None:
+        return [], 0
+    if not isinstance(inst, dict):
+        return [
+            f'{where}.installment must be an object like '
+            f'{{"number": 2, "of": 3}}; got {inst!r}'
+        ], 0
+    n, m = inst.get("number"), inst.get("of")
+    if not (_is_int(n) and _is_int(m) and 2 <= m and 1 <= n <= m):
+        return [
+            f"{where}.installment needs integers with "
+            f"1 <= number <= of and of >= 2; got {inst!r}"
+        ], 0
+
+    errors: list[str] = []
+    description = t.get("description", "")
+    if isinstance(description, str) and f"{n}/{m}" not in description:
+        errors.append(
+            f"{where}.description must contain '{n}/{m}' so each "
+            f"parcel stays distinct; got {description!r}"
+        )
+    metadata = t.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        errors.append(
+            f"{where}.metadata must be an object or null so the "
+            "installment can be recorded in it"
+        )
+    return errors, n - 1
+
+
+def _excluded_errors(data: dict, txs: list, excluded: list) -> list[str]:
+    """Check that left-out rows are explained, and that none are missing.
+
+    A card imported only for a trip still prints its regular charges,
+    such as a subscription already tracked as a manual expense. Those
+    lines go here instead of in `transactions`, each with a reason,
+    and the ingestor skips them.
+
+    Leaving lines out is safe only if the listed ones are all that was
+    left out. So once any line is excluded, the balance identity is
+    mandatory: imported plus excluded lines must equal closing minus
+    opening balance, to the cent. It is not required of every sidecar,
+    because many older DB-assisted ones do not satisfy it.
+    """
+    errors: list[str] = []
+    for i, t in enumerate(excluded):
+        if not isinstance(t, dict):
+            continue
+        reason = t.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            errors.append(
+                f"excluded_transactions[{i}].reason must say why the "
+                "line is left out"
+            )
+    if not excluded:
+        return errors
+
+    balances = data.get("balances")
+    if not isinstance(balances, dict):
+        balances = {}
+    opening, closing = balances.get("opening"), balances.get("closing")
+    if not (_is_number(opening) and _is_number(closing)):
+        errors.append(
+            "excluded_transactions needs numeric balances.opening and "
+            "balances.closing: the balance check is what proves only "
+            "the listed lines were left out"
+        )
+        return errors
+
+    lines = sum(
+        (
+            Decimal(str(t["amount"]))
+            for t in txs + excluded
+            if isinstance(t, dict) and _is_number(t.get("amount"))
+        ),
+        Decimal(0),
+    ).quantize(CENT)
+    expected = (Decimal(str(closing)) - Decimal(str(opening))).quantize(CENT)
+    if lines != expected:
+        errors.append(
+            f"transactions + excluded_transactions sum to {lines}, but "
+            f"closing - opening balance is {expected}: a line is "
+            "missing or misread"
+        )
     return errors

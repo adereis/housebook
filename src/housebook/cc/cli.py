@@ -119,6 +119,10 @@ def cmd_ingest(args):
         parts.append(
             f"{result['duplicate_rows_skipped']} duplicate row(s) skipped"
         )
+    if result.get("excluded_rows"):
+        parts.append(
+            f"{result['excluded_rows']} excluded row(s) left out as declared"
+        )
     if result.get("empty"):
         parts.append(f"{len(result['empty'])} wrote NO rows")
     if result["errors"]:

@@ -49,6 +49,7 @@ class CcIngestor(Ingestor):
     def ingest_sidecar(self, json_path: str) -> List[Transaction]:
         """Ingest one sidecar as an all-or-nothing file transaction."""
         self._last_skipped = False
+        self._last_excluded = 0
         dup_count = getattr(self, "_dup_rows_skipped", 0)
         messages: list[str] = []
         self._pending_messages = messages
@@ -115,7 +116,7 @@ class CcIngestor(Ingestor):
         seen_in_sidecar: dict[tuple, int] = {}
         for t in sc.data["transactions"]:
             desc = t.get("description", "")
-            amount, metadata = _ledger_amount(t, currency)
+            amount, metadata = _ledger_row(t, currency)
 
             key = (t["date"], desc, amount)
             occurrence = seen_in_sidecar.get(key, 0) + 1
@@ -160,6 +161,7 @@ class CcIngestor(Ingestor):
         self.db.mark_file_processed(
             json_path, json_hash, connection=connection,
         )
+        self._last_excluded = len(sc.data.get("excluded_transactions", []))
         return rows_written
 
     def ingest_directory(
@@ -179,8 +181,9 @@ class CcIngestor(Ingestor):
             is a red flag worth seeing — see prompts/reingest.md).
 
         Returns a dict with ingested/skipped/errors counts, a
-        duplicate_rows_skipped tally, and a list of
-        (path, error_message) for failures.
+        duplicate_rows_skipped tally, the excluded_rows the sidecars
+        declared and left out, and a list of (path, error_message)
+        for failures.
         """
         self._verbose = verbose
         self._dup_rows_skipped = 0
@@ -189,6 +192,7 @@ class CcIngestor(Ingestor):
             "skipped": 0,
             "rows_written": 0,
             "duplicate_rows_skipped": 0,
+            "excluded_rows": 0,
             "empty": [],
             "errors": [],
         }
@@ -204,6 +208,7 @@ class CcIngestor(Ingestor):
                         raise
                     result["errors"].append((jp, str(e)))
                     continue
+                result["excluded_rows"] += self._last_excluded
                 if rows:
                     result["ingested"] += 1
                     result["rows_written"] += len(rows)
@@ -232,7 +237,7 @@ class CcIngestor(Ingestor):
             pending.append(message)
 
 
-def _ledger_amount(t: dict, currency: str) -> tuple[Decimal, dict | None]:
+def _ledger_row(t: dict, currency: str) -> tuple[Decimal, dict | None]:
     """Return the USD amount the ledger stores, and the row's metadata.
 
     Every `transactions.amount` is read as dollars, by every view and
@@ -241,15 +246,29 @@ def _ledger_amount(t: dict, currency: str) -> tuple[Decimal, dict | None]:
     amount and the rate move into `metadata["fx"]`, so the conversion
     can be traced and recomputed from the row alone. The dedup check
     then compares dollars with dollars.
+
+    An installment marker moves into `metadata["installment"]`, since
+    the table has no column for it.
     """
     printed = Decimal(str(t["amount"]))
-    if currency == BASE_CURRENCY:
-        return printed, t.get("metadata") or None
+    recorded: dict = {}
+    if t.get("installment"):
+        recorded["installment"] = {
+            "number": t["installment"]["number"],
+            "of": t["installment"]["of"],
+        }
+    amount = printed
+    if currency != BASE_CURRENCY:
+        rate = Decimal(str(t["fx_rate"]))
+        amount = (printed / rate).quantize(CENT, rounding=ROUND_HALF_UP)
+        recorded["fx"] = {
+            "amount": float(printed),
+            "currency": currency,
+            "rate": float(rate),
+        }
+    if not recorded:
+        return amount, t.get("metadata") or None
+    # Validated to be an object (or null) whenever something is recorded.
     metadata = dict(t["metadata"]) if t.get("metadata") else {}
-    rate = Decimal(str(t["fx_rate"]))
-    metadata["fx"] = {
-        "amount": float(printed),
-        "currency": currency,
-        "rate": float(rate),
-    }
-    return (printed / rate).quantize(CENT, rounding=ROUND_HALF_UP), metadata
+    metadata.update(recorded)
+    return amount, metadata

@@ -202,6 +202,113 @@ class TestCcSchemaValidation(unittest.TestCase):
             )
 
 
+    # ── installments ─────────────────────────────────────────
+
+    def _parcel(self, number, of, date):
+        return {
+            "date": date,
+            "description": f"ONIBUS LEDGER - Parcela {number}/{of}",
+            "amount": 42.50,
+            "category": None,
+            "metadata": None,
+            "page": None,
+            "installment": {"number": number, "of": of},
+        }
+
+    def test_later_parcel_may_keep_the_purchase_date(self):
+        """Parcel 2/3 is billed one cycle after the purchase but keeps
+        its date, so it sits before the statement opens."""
+        data = self._make_valid_data()
+        data["transactions"] = [self._parcel(2, 3, "2025-02-01")]
+        self.assertEqual(validate_data_block(data), [])
+
+    def test_same_date_without_installment_is_rejected(self):
+        data = self._make_valid_data()
+        data["transactions"][0]["date"] = "2025-02-01"
+        errs = validate_data_block(data)
+        self.assertTrue(any("outside" in e for e in errs))
+
+    def test_parcel_older_than_its_cycles_is_rejected(self):
+        """Parcel 2 gets one earlier cycle, not an unbounded window:
+        a year-off date is still caught."""
+        data = self._make_valid_data()
+        data["transactions"] = [self._parcel(2, 3, "2024-03-01")]
+        errs = validate_data_block(data)
+        self.assertTrue(any("outside" in e for e in errs))
+
+    def test_malformed_installment_rejected(self):
+        for bad in ({"number": 4, "of": 3}, {"number": 1, "of": 1},
+                    {"number": True, "of": 3}, {"number": 1}, "1/3"):
+            data = self._make_valid_data()
+            data["transactions"] = [self._parcel(1, 3, "2025-03-09")]
+            data["transactions"][0]["installment"] = bad
+            errs = validate_data_block(data)
+            self.assertTrue(
+                any("installment" in e for e in errs), f"accepted {bad!r}",
+            )
+
+    def test_parcel_description_must_carry_its_marker(self):
+        """Without "2/3", parcel 2 matches parcel 1's date, description
+        and amount, and the cross-statement dedup would drop it."""
+        data = self._make_valid_data()
+        data["transactions"] = [self._parcel(2, 3, "2025-03-09")]
+        data["transactions"][0]["description"] = "ONIBUS LEDGER"
+        errs = validate_data_block(data)
+        self.assertTrue(any("'2/3'" in e for e in errs))
+
+    # ── excluded lines ───────────────────────────────────────
+
+    def _with_excluded(self):
+        """Opening 100 + 42.50 imported + 15.00 excluded = 157.50."""
+        data = self._make_valid_data()
+        data["balances"] = {"opening": 100.0, "closing": 157.50}
+        data["excluded_transactions"] = [{
+            "date": "2025-03-20",
+            "description": "STREAMING LEDGER",
+            "amount": 15.00,
+            "reason": "tracked as a manual expense",
+        }]
+        return data
+
+    def test_excluded_lines_that_balance_pass(self):
+        self.assertEqual(validate_data_block(self._with_excluded()), [])
+
+    def test_excluded_line_needs_a_reason(self):
+        data = self._with_excluded()
+        data["excluded_transactions"][0]["reason"] = " "
+        errs = validate_data_block(data)
+        self.assertTrue(any("reason" in e for e in errs))
+
+    def test_excluding_lines_requires_the_balance_identity(self):
+        """A line dropped by mistake leaves an exact gap, and only the
+        balance check can tell it from the declared exclusions."""
+        data = self._with_excluded()
+        data["balances"]["closing"] = 160.00
+        errs = validate_data_block(data)
+        self.assertTrue(any("closing - opening" in e for e in errs))
+
+    def test_excluding_lines_without_balances_rejected(self):
+        data = self._with_excluded()
+        data["balances"] = {"opening": None, "closing": 157.50}
+        errs = validate_data_block(data)
+        self.assertTrue(any("balances" in e for e in errs))
+
+    def test_excluded_line_dates_are_checked_too(self):
+        data = self._with_excluded()
+        data["excluded_transactions"][0]["date"] = "2024-03-20"
+        errs = validate_data_block(data)
+        self.assertTrue(
+            any("excluded_transactions[0].date" in e for e in errs),
+        )
+
+    def test_unbalanced_sidecar_without_exclusions_still_passes(self):
+        """The identity stays optional elsewhere: many older
+        DB-assisted sidecars do not satisfy it."""
+        data = self._make_valid_data()
+        data["balances"] = {"opening": 0.0, "closing": 999.0}
+        self.assertEqual(validate_data_block(data), [])
+
+
 # ── Issuer resolver tests ──────────────────────────────────────
 
 
@@ -595,6 +702,36 @@ class TestCcIngestor(unittest.TestCase):
 
         self.assertEqual(ing.ingest_sidecar(jp), [])
         self.assertEqual(len(self._rows()), 1)
+
+    def test_excluded_lines_are_not_ingested_but_are_counted(self):
+        data = self._valid_data()
+        data["balances"] = {"opening": 0, "closing": 70.00}
+        data["excluded_transactions"] = [{
+            "date": "2025-03-20", "description": "STREAMING LEDGER",
+            "amount": 15.00, "reason": "tracked as a manual expense",
+        }]
+        self._write_sidecar("stmt", data)
+        result = self._make_ingestor().ingest_directory(self.tmpdir)
+
+        self.assertEqual(result["rows_written"], 1)
+        self.assertEqual(result["excluded_rows"], 1)
+        self.assertEqual(
+            [r["description"] for r in self._rows()], ["TEST MERCHANT"],
+        )
+
+    def test_installment_marker_is_kept_in_metadata(self):
+        data = self._foreign_data([
+            ("ONIBUS LEDGER - Parcela 2/3", 30.00, 3.0, None),
+        ])
+        data["transactions"][0]["installment"] = {"number": 2, "of": 3}
+        self._make_ingestor().ingest_sidecar(
+            self._write_sidecar("brl", data),
+        )
+        (row,) = self._rows()
+        self.assertEqual(json.loads(row["metadata"]), {
+            "installment": {"number": 2, "of": 3},
+            "fx": {"amount": 30.0, "currency": "BRL", "rate": 3.0},
+        })
 
     def test_invalid_sidecar_raises(self):
         ing = self._make_ingestor()

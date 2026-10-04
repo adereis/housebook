@@ -94,7 +94,9 @@ verify:
    zero-length period errors.
 3. **All transaction dates are within `[start - 14d, end + 14d]`**
    — catches year-off-by-1 on individual transactions. The 14-day
-   grace handles car-rental / hotel / international posting lag.
+   grace handles car-rental / hotel / international posting lag. An
+   installment parcel keeps its purchase date and gets one extra
+   billing cycle per earlier parcel (see *Installments*).
 4. **Transaction count and sum match expectations** — if DB-assisted,
    match the DB exactly. If from-scratch, verify against the
    statement's printed totals or page-bottom subtotals.
@@ -102,7 +104,10 @@ verify:
    Every charge, credit, fee, and interest line is a transaction, so
    the identity holds on every statement. It is the strongest
    from-scratch check: a dropped line shows up as an exact gap (a
-   missing `.99` charge, a missing `$5,000.00` payment).
+   missing `.99` charge, a missing `$5,000.00` payment). Lines you
+   leave out on purpose go in `excluded_transactions` and still count
+   here; the validator enforces the identity whenever any are
+   excluded.
 6. **Each statement starts the day after the previous one for that
    card ended.** A gap usually means a missing statement, but store
    cards and rarely used cards issue no statement for a cycle that
@@ -239,6 +244,59 @@ PTAX has no rate on weekends and Brazilian holidays. Use the most
 recent earlier business day's rate for those dates. Start the range a
 week before the earliest transaction, so a Monday-holiday purchase
 still finds a rate.
+
+## Leaving lines out: `excluded_transactions`
+
+Some cards are imported only for a stretch of time, such as a foreign
+card used on a trip (its `cadence` note in `issuers.json` says so).
+Its statements still print regular charges that are tracked some
+other way, typically a subscription kept as a recurring manual
+expense. Importing that line would count the subscription twice.
+
+Move such a line from `transactions` to `data.excluded_transactions`,
+with the same fields plus a `reason`:
+
+```json
+"excluded_transactions": [
+  {
+    "date": "2026-03-17",
+    "description": "STREAMING SERVICE",
+    "amount": 40.00,
+    "reason": "Recurring; tracked as manual expense 7 (Streaming)"
+  }
+]
+```
+
+- The ingestor skips these lines, and `housebook-cc ingest` reports
+  how many it left out.
+- Their dates are checked like any other line's.
+- Once any line is excluded, the validator requires the balance
+  identity: `transactions` plus `excluded_transactions` must sum to
+  closing − opening balance. That is the proof that nothing else was
+  dropped.
+- Exclude only lines another record already covers, or that the user
+  asked to leave out. Never exclude a line because it is hard to
+  read: escalate instead.
+
+## Installments (parcelas)
+
+Brazilian cards split a purchase into parcels, billed one per
+statement, and every parcel keeps the **purchase** date. Parcel 2/3
+of a purchase on 10 May is printed again, dated 10 May, on the June
+statement.
+
+- Give each parcel row `"installment": {"number": 2, "of": 3}`. The
+  validator then allows its date one extra billing cycle before the
+  period per earlier parcel.
+- Keep the marker `2/3` in the description (`ACME BUS - Parcela
+  2/3`). If the issuer prints it another way ("2 de 3"), write it as
+  `n/m`. Parcels share date and often amount, so without it the
+  duplicate check would take parcel 2 for a repeat of parcel 1.
+- The ingestor stores the marker in the row's `metadata.installment`.
+- A purchase's total is the sum of its parcels. When a later parcel
+  falls on a statement that will not be imported (the card's
+  trip-only window has ended), record that parcel as a one-time
+  manual expense instead.
 
 ## Escalation rules — when to ASK rather than guess
 

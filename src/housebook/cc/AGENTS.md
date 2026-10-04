@@ -56,6 +56,9 @@ array inside the v1 envelope. Key fields in the `data` block:
   DB-assisted import; null for from-scratch mode)
 - `currency` (optional, ISO 4217, default `USD`), `fx_source`, and
   `transactions[].fx_rate` — see *Foreign-currency statements*
+- `transactions[].installment` (optional `{number, of}`) and
+  `excluded_transactions[]` (lines left out, each with a `reason`) —
+  see *Occasional cards*
 
 One sidecar is one database transaction: every transaction row,
 provenance field, and the `processed_files` marker commits together.
@@ -78,6 +81,8 @@ found during the bulk-import pass:
 | `sum(amounts) ≈ tx_total_db` | Amount-drift from rounding or missing rows |
 | Non-USD: `fx_source` set, every row has a positive `fx_rate` | A foreign statement landing in the ledger unconverted |
 | USD: no row has an `fx_rate` | A sidecar that forgot its `currency` |
+| Excluded lines: each has a `reason`; imported + excluded = closing − opening | A line dropped by mistake hiding among deliberate exclusions |
+| Installment parcel: `n/m` in the description; date may precede the period by `n − 1` extra cycles | Parcels dropped as duplicates of one another; year-off parcel dates |
 
 The 14-day grace handles real-world posting lag (car rentals, hotels,
 international merchants). Year-inference bugs are 330+ days off —
@@ -106,6 +111,31 @@ project total would have had to convert, and a single forgotten
 conversion would silently add reais to dollars. Converting once, at
 the boundary, keeps every consumer unchanged. `prompts/cc/import.md`
 says where the BRL rate comes from (Banco Central do Brasil PTAX).
+
+## Occasional cards (imported for a trip only)
+
+A card the user does not track month to month can still be imported
+for a bounded stretch, such as a foreign card used on a single trip.
+Its `cadence` note in `issuers.json` marks it occasional, so the
+acquire SOP never reports its untracked months as gaps. Two sidecar
+features make such a partial import honest:
+
+- **`excluded_transactions`.** Its statements still print regular
+  charges tracked elsewhere (a subscription kept as a recurring
+  manual expense). Those lines are listed with a `reason` and
+  skipped at ingest. Once any line is excluded, the validator
+  requires imported + excluded lines to equal closing − opening
+  balance. That is the only proof that the listed lines are all that
+  was left out. It is not required of every sidecar, because about a
+  third of the historical ones (DB-assisted imports that predate
+  full-statement extraction) do not satisfy it.
+- **`installment`.** A purchase split into parcels prints each parcel
+  on a later statement under the purchase date. The marker widens the
+  early date bound by one billing cycle per earlier parcel, instead
+  of dropping the date check. It also requires `n/m` in the
+  description, so parcels of one purchase stay distinct for the
+  cross-statement duplicate check. A parcel billed after the import
+  window closes is recorded as a one-time manual expense instead.
 
 ## Per-issuer quirks
 
