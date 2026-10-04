@@ -1,10 +1,10 @@
-"""Tests for the Amazon CSV ingestor.
+"""Tests for the Amazon export import and CSV ingestor.
 
-Focused on the intra-file duplicate regression: an Order History CSV
-can legitimately contain the same product, ordered the same day, for
-the same amount (two separate orders). The old ingestor passed the
-default max_duplicates=1 to transaction_exists, so the second such
-row matched the one just inserted and was silently dropped.
+Two regressions anchor this file. An Order History CSV can
+legitimately hold the same product, ordered the same day, for the
+same amount, and both rows must land. A newer export of the same
+history must add only what is new, even where Amazon reworded a
+description (TestAmazonExportIdentity).
 """
 
 import csv
@@ -910,4 +910,241 @@ class TestAmazonImport(unittest.TestCase):
             self._import()
         self.assertFalse(
             os.path.exists(os.path.join(self.amazon_dir, "sterling")),
+        )
+
+
+class TestAmazonExportIdentity(unittest.TestCase):
+    """A newer export of the same history adds only what is new.
+
+    Exports are cumulative, so ingest must recognize rows it already
+    holds. It keys them on (Order ID, date, amount), never on the
+    description, which Amazon rewords between exports. A description
+    key once stored the same refunds twice.
+    """
+
+    ORDER = "112-0000001-0000001"
+
+    def setUp(self):
+        import shutil
+        self.db_fd, self.db_path = tempfile.mkstemp(suffix=".db")
+        self.addCleanup(os.unlink, self.db_path)
+        self.addCleanup(os.close, self.db_fd)
+        _create_schema(self.db_path)
+        self.profile_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.profile_dir)
+        for sub in ("Your Amazon Orders", "Your Returns & Refunds"):
+            os.makedirs(os.path.join(self.profile_dir, sub))
+
+    def _write(self, rel, fields, rows, encoding="utf-8"):
+        path = os.path.join(self.profile_dir, rel)
+        with open(path, "w", newline="", encoding=encoding) as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            for r in rows:
+                w.writerow(r)
+
+    def _orders(self, *lines, encoding="utf-8"):
+        """lines: (order_id, date, amount, product) tuples."""
+        self._write(
+            "Your Amazon Orders/Order History.csv",
+            ["Order ID", "Order Date", "Currency", "Total Amount",
+             "Product Name"],
+            [{"Order ID": o, "Order Date": f"{d}T10:00:00Z",
+              "Currency": "USD", "Total Amount": a, "Product Name": p}
+             for o, d, a, p in lines],
+            encoding=encoding,
+        )
+
+    def _refunds(self, *events):
+        """events: (order_id, date, amount) tuples."""
+        self._write(
+            "Your Returns & Refunds/Refund Details.csv",
+            ["Order ID", "Refund Date", "Currency", "Refund Amount"],
+            [{"Order ID": o, "Refund Date": f"{d}T10:00:00Z",
+              "Currency": "USD", "Refund Amount": a}
+             for o, d, a in events],
+        )
+
+    def _digital(self, *orders):
+        """orders: (order_id, date, amount, product) tuples."""
+        self._write(
+            "Your Amazon Orders/Digital Content Orders.csv",
+            ["Order ID", "Order Date", "Product Name",
+             "Price Currency Code", "Transaction Amount"],
+            [{"Order ID": o, "Order Date": f"{d}T10:00:00Z",
+              "Product Name": p, "Price Currency Code": "USD",
+              "Transaction Amount": a}
+             for o, d, a, p in orders],
+        )
+
+    def _ingest(self):
+        from housebook.amazon.ingestor import AmazonIngestor
+        from housebook.core.database import Database
+        ing = AmazonIngestor(Database(self.db_path), None)
+        txs = ing.ingest_profile(self.profile_dir, profile="sterling")
+        return txs, ing.counts
+
+    def _rows(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM transactions ORDER BY id",
+        ).fetchall()
+        conn.close()
+        return rows
+
+    def _sql(self, statement, *params):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(statement, params)
+        conn.commit()
+        conn.close()
+
+    def _errors(self):
+        conn = sqlite3.connect(self.db_path)
+        n = conn.execute("SELECT COUNT(*) FROM ingestion_errors").fetchone()[0]
+        conn.close()
+        return n
+
+    def test_reworded_product_name_is_not_a_new_row(self):
+        self._orders((self.ORDER, "2025-03-01", "19.99", "Maple Desk Lamp"))
+        self._ingest()
+        self._orders(
+            (self.ORDER, "2025-03-01", "19.99", "Maple LED Desk Lamp, Black"),
+        )
+        txs, counts = self._ingest()
+        self.assertEqual(txs, [])
+        self.assertEqual(counts["already_present"], 1)
+        rows = self._rows()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["description"], "Amazon: Maple Desk Lamp")
+
+    def test_renamed_digital_subscription_is_not_a_new_row(self):
+        self._digital(("D01-0000001-0000001", "2025-02-17", "3.49",
+                       "Ad-free Streaming"))
+        self._ingest()
+        self._digital(("D01-0000001-0000001", "2025-02-17", "3.49",
+                       "Streaming Ultra"))
+        txs, _ = self._ingest()
+        self.assertEqual(txs, [])
+        self.assertEqual(len(self._rows()), 1)
+
+    def test_refund_named_after_another_line_is_not_a_new_row(self):
+        """A refund's description names the order's last-listed item,
+        so reordering the lines renames the refund."""
+        lines = [(self.ORDER, "2025-04-01", "12.00", "Penny Notebook"),
+                 (self.ORDER, "2025-04-01", "30.00", "Buck Backpack")]
+        self._orders(*lines)
+        self._refunds((self.ORDER, "2025-04-10", "12.00"))
+        self._ingest()
+        self._orders(*reversed(lines))
+        # The same refund in a new file: "12.0" for "12.00" changes
+        # the file hash, so the refunds CSV is processed again.
+        self._refunds((self.ORDER, "2025-04-10", "12.0"))
+        txs, _ = self._ingest()
+        self.assertEqual(txs, [])
+        refunds = [r for r in self._rows() if r["amount"] < 0]
+        self.assertEqual(len(refunds), 1)
+
+    def test_later_refund_on_stored_order_is_inserted(self):
+        self._orders((self.ORDER, "2025-05-01", "40.00", "Ally Tent"))
+        self._refunds((self.ORDER, "2025-05-10", "15.00"))
+        self._ingest()
+        self._refunds((self.ORDER, "2025-05-10", "15.00"),
+                      (self.ORDER, "2025-06-02", "25.00"))
+        txs, counts = self._ingest()
+        self.assertEqual([t.amount for t in txs], [Decimal("-25.00")])
+        self.assertEqual(counts["conflicts"], 0)
+
+    def test_identical_lines_land_and_stay_single(self):
+        """Two identical lines are two rows, once, across exports."""
+        line = (self.ORDER, "2025-07-01", "5.00", "Sterling Batteries")
+        self._orders(line, line)
+        txs, _ = self._ingest()
+        self.assertEqual(len(txs), 2)
+        self._orders(line, line, ("112-0000002-0000002", "2025-07-02",
+                                  "8.00", "Sterling Charger"))
+        txs, _ = self._ingest()
+        self.assertEqual(len(txs), 1)
+        self.assertEqual(len(self._rows()), 3)
+
+    def test_restated_amount_updates_row_and_flags_review(self):
+        """A pre-order authorized at one price and charged at another."""
+        self._orders((self.ORDER, "2026-01-11", "64.20", "Ledger Game"))
+        self._ingest()
+        self._sql(
+            "UPDATE transactions SET status = 'AGENT_VERIFIED', "
+            "needs_review = 0, category = 'Entertainment', trip_id = 7",
+        )
+        self._orders((self.ORDER, "2026-01-11", "61.05", "Ledger Game"))
+        txs, counts = self._ingest()
+        self.assertEqual(txs, [])
+        self.assertEqual(counts["restated"], 1)
+        (row,) = self._rows()
+        self.assertAlmostEqual(row["amount"], 61.05)
+        self.assertEqual(row["needs_review"], 1)
+        self.assertEqual(row["status"], "AGENT_VERIFIED")
+        self.assertEqual(row["category"], "Entertainment")
+        self.assertEqual(row["trip_id"], 7)
+
+    def test_dry_run_reports_restatement_without_writing(self):
+        from housebook.amazon.ingestor import AmazonIngestor
+        from housebook.core.database import Database
+        self._orders((self.ORDER, "2026-01-11", "64.20", "Ledger Game"))
+        self._ingest()
+        self._orders((self.ORDER, "2026-01-11", "61.05", "Ledger Game"))
+        ing = AmazonIngestor(Database(self.db_path, dry_run=True), None)
+        ing.ingest_profile(self.profile_dir, profile="sterling")
+        self.assertEqual(ing.counts["restated"], 1)
+        (row,) = self._rows()
+        self.assertAlmostEqual(row["amount"], 64.20)
+
+    def test_vanished_row_is_reported_not_deleted(self):
+        """An order cancelled after ingest drops to $0 in the export,
+        which ingest skips; the stored charge must not pass silently."""
+        self._orders((self.ORDER, "2026-02-01", "22.00", "Penny Mug"))
+        self._ingest()
+        self._orders((self.ORDER, "2026-02-01", "0", "Penny Mug"))
+        txs, counts = self._ingest()
+        self.assertEqual(txs, [])
+        self.assertEqual(counts["conflicts"], 1)
+        self.assertEqual(len(self._rows()), 1)
+        self.assertEqual(self._errors(), 1)
+
+    def test_ambiguous_restatement_writes_nothing(self):
+        """Two lines of one order changed on the same date: which
+        stored row became which is unknowable, so nothing is guessed."""
+        self._orders((self.ORDER, "2026-03-01", "10.00", "Buck Socks"),
+                     (self.ORDER, "2026-03-01", "20.00", "Buck Shoes"))
+        self._ingest()
+        self._orders((self.ORDER, "2026-03-01", "9.00", "Buck Socks"),
+                     (self.ORDER, "2026-03-01", "18.00", "Buck Shoes"))
+        txs, counts = self._ingest()
+        self.assertEqual(txs, [])
+        self.assertEqual(counts["restated"], 0)
+        self.assertEqual(counts["conflicts"], 4)
+        self.assertEqual(
+            sorted(r["amount"] for r in self._rows()), [10.0, 20.0],
+        )
+
+    def test_rows_without_order_id_block_ingest(self):
+        from housebook.amazon.ingestor import AmazonIdentityError
+        self._sql(
+            "INSERT INTO transactions (date, description, amount, source, "
+            "status, profile) VALUES ('2020-01-01', 'Amazon: Old Lamp', "
+            "15.0, 'Amazon', 'AGENT_VERIFIED', 'sterling')",
+        )
+        self._orders((self.ORDER, "2020-01-01", "15.00", "Old Lamp"))
+        with self.assertRaises(AmazonIdentityError):
+            self._ingest()
+        self.assertEqual(len(self._rows()), 1)
+
+    def test_byte_order_mark_does_not_hide_first_column(self):
+        """Amazon's 2026-10 exports start with a UTF-8 byte-order mark.
+        Read as plain utf-8, the first header becomes '\\ufeffOrder ID'."""
+        self._orders((self.ORDER, "2026-04-01", "7.50", "Ally Pens"),
+                     encoding="utf-8-sig")
+        txs, _ = self._ingest()
+        self.assertEqual(len(txs), 1)
+        self.assertEqual(
+            json.loads(txs[0].metadata)["amazon_order_id"], self.ORDER,
         )

@@ -149,7 +149,7 @@ def cmd_ingest(args):
     """Ingest Amazon CSVs from all profile directories."""
     from housebook.core.database import Database
 
-    from .ingestor import AmazonIngestor
+    from .ingestor import AmazonIdentityError, AmazonIngestor
 
     db_path = args.db_path or DB_PATH
     dry_run = getattr(args, "dry_run", False)
@@ -162,25 +162,35 @@ def cmd_ingest(args):
     intel = Intelligence(db.get_rules())
 
     ingestor = AmazonIngestor(db, intel)
-    result = ingestor.ingest_all_profiles(
-        AMAZON_DIR, verbose=getattr(args, "verbose", False),
-    )
+    try:
+        result = ingestor.ingest_all_profiles(
+            AMAZON_DIR, verbose=getattr(args, "verbose", False),
+        )
+    except AmazonIdentityError as e:
+        print(f"  Error: {e}")
+        sys.exit(1)
 
     parts = []
     if result["profiles"]:
         parts.append(f"{result['profiles']} profile(s)")
     if result["rows_written"]:
         parts.append(f"{result['rows_written']} transaction(s)")
+    if result["restated"]:
+        parts.append(f"{result['restated']} restated")
     if result["skipped"]:
         parts.append(f"{result['skipped']} unchanged")
-    if result.get("duplicate_rows_skipped"):
-        parts.append(
-            f"{result['duplicate_rows_skipped']} duplicate row(s) skipped"
-        )
+    if result["already_present"]:
+        parts.append(f"{result['already_present']} row(s) already stored")
     print(
         f"  Amazon ingest: "
         f"{', '.join(parts) or 'nothing to do'}."
     )
+    if result["conflicts"]:
+        print(
+            f"  {result['conflicts']} row(s) need a decision (marked "
+            f"'!' above, also in ingestion_errors); nothing was "
+            f"written for their orders."
+        )
     if dry_run:
         print("  (dry run — no changes written)")
 
@@ -294,7 +304,7 @@ def main():
     )
     p_ing.add_argument(
         "--verbose", "-v", action="store_true",
-        help="Print every row suppressed by the duplicate check",
+        help="Print every export row found already stored",
     )
 
     p_lst = sub.add_parser("list", help="List Amazon transactions")

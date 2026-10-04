@@ -52,14 +52,55 @@ together; an unexpected failure rolls the whole CSV back without
 affecting the other three export files. Success output is emitted only
 after commit.
 
+CSVs are read as `utf-8-sig`. Exports since 2026-10 begin with a
+byte-order mark, and plain `utf-8` would glue it onto the first
+header (`﻿ASIN`), so a reader keyed on that column would miss it.
+
+## How ingest recognizes rows it already has
+
+Each export is cumulative: the newest one repeats every order since
+the account opened. Ingest must therefore pick out what is new. A
+row's identity is its **Order ID, date and amount**, within its CSV
+kind (`metadata.csv`) and profile. The description is never part of
+the key, because Amazon rewords it between exports:
+
+- Products get renamed. In 2026-10 a streaming add-on took a new
+  name on every past monthly charge.
+- A refund's description names whichever item of a multi-item order
+  the export lists last, so reordered lines rename the refund.
+
+Before 2026-10 the key included the description. That is how some
+refunds came to be stored twice, and the duplicates were removed by
+hand.
+
+Per Order ID, export rows that match a stored row exactly are already
+present. What is left on either side is settled by `_sync_rows`:
+
+| Left over | Meaning | Ingest does |
+|-----------|---------|-------------|
+| Export rows only | New order, new line, or a later refund | Inserts them |
+| One stored + one export row (same date, or one of each overall) | Amazon restated the row, e.g. a pre-order authorized at $64.20 and charged at $61.05 | Updates the stored row's date and amount, sets `needs_review = 1`, keeps its status, category, links and assignments |
+| Anything else (a stored row the export no longer lists, or several changed lines) | Cancelled after ingest, or ambiguous | Writes nothing for that order; prints `!` and logs to `ingestion_errors` |
+
+A restated row that is linked to a refund prints a reminder to
+re-check the pair, since the amounts may no longer cancel. An order
+still `Authorized` (not shipped) carries a provisional amount, so
+restatements are expected for recent pre-orders.
+
+**Invariant: every Amazon row carries `amazon_order_id` and `csv`.**
+A row without them can never match, so its purchase would be stored
+again. Ingest refuses to run (`AmazonIdentityError`) while a profile
+has any such row. Fix the row's metadata, or delete it if it
+duplicates a row that has them, then ingest again.
+
 Digital orders use a different DB description prefix
 (`Amazon Digital: <product>`) to distinguish them from physical
 orders; digital refunds use `Amazon Digital Refund: <product>`.
 Status is `UNVERIFIED` and `needs_review = 1` like every other
 ingested row.
 
-**Order ID is persisted on every ingested row** in
-`transactions.metadata` as JSON:
+**Order ID is persisted on every ingested row** (and ingest enforces
+it, see above) in `transactions.metadata` as JSON:
 
 ```json
 {"amazon_order_id": "<order-id>",

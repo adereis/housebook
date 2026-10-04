@@ -317,6 +317,39 @@ class Database:
             if owns_connection:
                 conn.close()
 
+    def restate_transaction(
+        self, tx_id: int, *, date: str, amount: Decimal,
+        source_file_path: str | None = None,
+        source_file_sha256: str | None = None,
+        connection: sqlite3.Connection | None = None,
+    ):
+        """Apply a source's own correction to a stored row.
+
+        For a source that restates a row it reported before, such as an
+        Amazon pre-order authorized at one price and charged at
+        another. The row takes the new date and amount and is flagged
+        for review again. Its category, status, description, links and
+        assignments stay, so the audit trail survives the correction.
+        """
+        if self.dry_run:
+            return
+        owns_connection = connection is None
+        conn = connection or self._get_connection()
+        try:
+            conn.execute(
+                "UPDATE transactions SET date = ?, amount = ?, "
+                "needs_review = 1, source_file_path = ?, "
+                "source_file_sha256 = ? WHERE id = ?",
+                (date, str(amount),
+                 self._to_relative_path(source_file_path),
+                 source_file_sha256, tx_id),
+            )
+            if owns_connection:
+                conn.commit()
+        finally:
+            if owns_connection:
+                conn.close()
+
     def transaction_exists(
         self, description: str, date: str,
         amount: Decimal, source: str = "",

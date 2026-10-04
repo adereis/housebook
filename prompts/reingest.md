@@ -16,18 +16,27 @@ Applies to all four sources (cc, amazon, tax, hsa).
 ## Why re-ingest is safe (additive, never destructive)
 
 Re-ingesting **only backfills rows the DB is missing**. It never
-deletes, edits, or double-inserts an existing row, because of two
-layers of dedup:
+deletes or double-inserts an existing row, and it edits one only when
+an Amazon export restates it (below). Two layers of dedup ensure this:
 
 1. **File level** — `is_file_processed(path, hash)` short-circuits any
    sidecar/CSV whose path+content hash is already recorded. Re-running
    without clearing `processed_files` is a no-op.
 2. **Row level** —
-   - CC & Amazon: `Database.transaction_exists(...)` is
+   - CC: `Database.transaction_exists(...)` is
      **multiplicity-aware** — the ingestor passes
-     `max_duplicates=<occurrence within this file>` (and `profile` for
-     Amazon), so the Nth identical line is skipped only when the DB
-     already holds N copies.
+     `max_duplicates=<occurrence within this file>`, so the Nth
+     identical line is skipped only when the DB already holds N copies.
+   - Amazon: rows match on **Order ID, date and amount** within their
+     CSV kind and profile, never on the description, which Amazon
+     rewords between exports. Matching is multiset-aware like CC's.
+     A row Amazon *restated* (one stored and one export row left for
+     an order, such as a pre-order charged below its authorized price)
+     is updated in place and flagged `needs_review`. Anything
+     ambiguous is reported with `!` and written nowhere. Ingest
+     refuses outright while any Amazon row lacks `amazon_order_id`.
+     Details: `src/housebook/amazon/AGENTS.md`, "How ingest
+     recognizes rows it already has".
    - Tax: a **content guard** in `tax/ingestor.py` skips the insert
      when a row with the same `(tax_year, document_type, issuer,
      amount)` already exists.
@@ -54,10 +63,13 @@ files and stops there.
    housebook-cc ingest          # or housebook-amazon / housebook-tax / housebook-hsa
    ```
    On cc/amazon, add `--verbose` to print every row the dedup check
-   suppresses. A non-zero **"duplicate row(s) skipped"** on a *fresh*
-   ingest (one that should be inserting new rows) is a red flag — it
-   means rows are being silently absorbed; investigate before trusting
-   the result.
+   suppresses. On cc, a non-zero **"duplicate row(s) skipped"** on a
+   *fresh* ingest (one that should be inserting new rows) is a red
+   flag — it means rows are being silently absorbed; investigate
+   before trusting the result. On amazon the matching count reads
+   **"row(s) already stored"** and is normally large, because every
+   export repeats the whole history. There, the red flags are the
+   **"restated"** count and any **"need a decision"** line.
 4. **Verify** (next section), then delete any stale `processed_files`
    orphans the rename left behind.
 
@@ -76,7 +88,10 @@ files and stops there.
 ## Verifying faithfulness to the source
 
 Compare **per-key multiplicity** of `(date, description, amount[,
-profile])` between the source files and the DB.
+profile])` between the source files and the DB. For Amazon, key on
+`(profile, metadata.csv, amazon_order_id, date, amount)` instead, the
+same identity the ingestor uses; a description key reports reworded
+products as false shortfalls.
 
 > **CRITICAL: normalize the amount numerically, never by string.**
 > `Decimal`/`float` string forms differ — `"106"` vs `"106.0"`,
@@ -86,8 +101,10 @@ profile])` between the source files and the DB.
 > numerically: `amount = ? OR ABS(amount - ?) < 0.005`.)
 
 A clean repair shows **shortfall = 0** and **over-source = 0**. Keys
-present only in the DB ("DB-only") are normal — they are rows from an
-older export no longer in the current file (the DB accumulates).
+present only in the DB ("DB-only") are normal for CC — they are rows
+from an older statement no longer on disk (the DB accumulates).
+Amazon exports are cumulative, so an Amazon DB-only key means the
+order was cancelled or restated after ingest; ingest reports those.
 
 ## processed_files hygiene
 

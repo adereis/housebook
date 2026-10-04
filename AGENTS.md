@@ -384,7 +384,8 @@ src/housebook/<source>/    ← isolated module
 > **Correcting historical data?** See `prompts/reingest.md`. Clearing a
 > source's `processed_files` rows and re-running its ingest is a safe,
 > additive repair (file-level idempotency + multiplicity/content-aware
-> row dedup mean it only backfills missing rows). That runbook also
+> row dedup mean it only backfills missing rows; Amazon also updates a
+> row its export restated, flagged for review). That runbook also
 > covers `processed_files` orphan-vs-untracked hygiene after renames
 > and the amount-normalization trap when verifying faithfulness.
 

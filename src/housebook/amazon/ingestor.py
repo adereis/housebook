@@ -33,12 +33,18 @@ correctly skipped by the zero-amount filter. Monthly Payment Balance
 gross Order History row already counts the full sale price, and
 splitting it into installments is a reconciler-side concern (see
 AGENTS.md "Amazon ↔ bank reconciliation").
+
+Each export is cumulative, so most of its rows are already stored.
+A row is recognized by Amazon's identity — Order ID, date and amount
+within its CSV and profile — never by its description, which Amazon
+rewords between exports. See `_sync_rows`.
 """
 
 import csv
 import json
 import os
 from collections import defaultdict
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import List, Optional
 
@@ -46,14 +52,61 @@ from housebook.config.settings import WORKSPACE_DIR
 from housebook.core.ingestor import Ingestor
 from housebook.core.models import Transaction
 
+# Label per metadata.csv value, for progress and conflict messages.
+KIND_LABELS = {
+    "orders": "orders",
+    "digital": "digital",
+    "digital_refunds": "digital refunds",
+    "refunds": "refunds",
+}
+
+
+class AmazonIdentityError(Exception):
+    """A profile holds Amazon rows that carry no Order ID.
+
+    Such a row can never match an export row, so ingesting would
+    store its purchase or refund a second time.
+    """
+
+
+@dataclass
+class _ExportRow:
+    """One prospective DB row, parsed from an export CSV."""
+
+    order_id: str
+    date: str
+    amount: Decimal
+    description: str
+    category_text: str  # text handed to Intelligence for a category
+    line: int  # CSV line, for ingestion_errors
+
+
+@dataclass
+class _StoredRow:
+    id: int
+    date: str
+    amount: Decimal
+    description: str
+    linked_transaction_id: Optional[int]
+
+
+def _cents(value) -> Decimal:
+    """Compare amounts at cent precision; the DB column is REAL."""
+    return Decimal(str(value)).quantize(Decimal("0.01"))
+
 
 class AmazonIngestor(Ingestor):
+    def __init__(self, db, intel):
+        super().__init__(db, intel)
+        # Running totals across every file this instance ingests.
+        self.counts = self._zero_counts()
+
     def ingest_profile(
         self,
         profile_dir: str,
         profile: str | None = None,
     ) -> List[Transaction]:
-        """Ingest Order History + Refund Details for one profile."""
+        """Ingest one profile's four export CSVs; return new rows."""
         transactions: List[Transaction] = []
         profile = profile or os.path.basename(profile_dir)
         orders_path = os.path.join(
@@ -122,30 +175,34 @@ class AmazonIngestor(Ingestor):
     ) -> dict:
         """Walk amazon/<profile>/ directories, ingest each.
 
-        verbose: print every row suppressed by the duplicate check.
+        verbose: print every export row found already stored.
         """
         self._verbose = verbose
-        self._dup_rows_skipped = 0
-        result = {
-            "profiles": 0, "rows_written": 0,
-            "skipped": 0, "duplicate_rows_skipped": 0,
-        }
+        self.counts = self._zero_counts()
+        result = {"profiles": 0, "rows_written": 0, "skipped": 0}
         if not os.path.isdir(amazon_dir):
-            return result
+            return {**result, **self.counts}
         for entry in sorted(os.listdir(amazon_dir)):
             subdir = os.path.join(amazon_dir, entry)
             if not os.path.isdir(subdir) or entry in (
                 "__pycache__", ".DS_Store",
             ):
                 continue
+            restated_before = self.counts["restated"]
             txs = self.ingest_profile(subdir, profile=entry)
-            if txs:
+            if txs or self.counts["restated"] > restated_before:
                 result["profiles"] += 1
                 result["rows_written"] += len(txs)
             else:
                 result["skipped"] += 1
-        result["duplicate_rows_skipped"] = self._dup_rows_skipped
-        return result
+        return {**result, **self.counts}
+
+    @staticmethod
+    def _zero_counts() -> dict:
+        return {"already_present": 0, "restated": 0, "conflicts": 0}
+
+    def _count(self, name: str, n: int = 1) -> None:
+        self.counts[name] += n
 
     def _ingest_file(self, path: str, ingest) -> Optional[List[Transaction]]:
         """Run one CSV and its processed marker in one transaction.
@@ -154,7 +211,7 @@ class AmazonIngestor(Ingestor):
         (possibly empty) for a newly processed file.
         """
         file_hash = self.calculate_hash(path)
-        dup_count = getattr(self, "_dup_rows_skipped", 0)
+        counts = dict(self.counts)
         messages: list[str] = []
         self._pending_messages = messages
         try:
@@ -169,13 +226,212 @@ class AmazonIngestor(Ingestor):
                         path, file_hash, connection=connection,
                     )
         except BaseException:
-            self._dup_rows_skipped = dup_count
+            self.counts = counts
             raise
         finally:
             del self._pending_messages
         for message in messages:
             print(message)
         return result
+
+    # ── Matching export rows to stored rows ────────────────────
+
+    def _sync_rows(
+        self, kind: str, rows: List[_ExportRow], path: str,
+        profile: str, *, connection,
+    ) -> List[Transaction]:
+        """Store what one CSV adds or restates; return inserted rows.
+
+        A row's identity is (Order ID, date, amount) within its CSV
+        kind and profile. The description is deliberately left out.
+        Amazon renames products between exports (a subscription
+        add-on renamed on every past charge). A refund's description
+        names whichever item of a multi-item order the export lists
+        last. Either way a description key re-inserts rows the DB
+        already holds, which is how earlier exports duplicated refunds.
+
+        Per Order ID, export rows that match a stored row exactly are
+        already present. The leftovers are settled as follows:
+
+        - Only export rows remain: they are new and get inserted. A
+          new order, or a later refund on an old order, looks like this.
+        - One stored and one export row remain on the same date, or one
+          of each overall: Amazon restated the row. A pre-order that
+          was authorized at one price and charged at a lower one looks
+          like this. The stored row takes the export's date and amount
+          and is flagged for review again.
+        - Anything else remains, such as a stored row the export no
+          longer lists: it is reported and logged to ingestion_errors,
+          and nothing is written for that order. Guessing would either
+          double-count or rewrite an audited row on a hunch.
+        """
+        rel_path = self._ws_relative(path)
+        file_sha = self.calculate_hash(path)
+        label = f"Amazon {KIND_LABELS[kind]} ({profile})"
+
+        anonymous = connection.execute(
+            "SELECT COUNT(*) FROM transactions "
+            "WHERE source = 'Amazon' AND profile = ? AND ("
+            " json_extract(metadata, '$.amazon_order_id') IS NULL"
+            " OR json_extract(metadata, '$.csv') IS NULL)",
+            (profile,),
+        ).fetchone()[0]
+        if anonymous:
+            raise AmazonIdentityError(
+                f"{anonymous} Amazon row(s) of profile {profile!r} carry "
+                f"no Order ID in metadata, so no export row can match "
+                f"them and ingest would store them twice. Give each "
+                f"its amazon_order_id and csv, or remove it if it "
+                f"duplicates a row that has them, then ingest again."
+            )
+
+        stored: dict[str, list[_StoredRow]] = defaultdict(list)
+        for tx_id, oid, date, amount, desc, linked in connection.execute(
+            "SELECT id, json_extract(metadata, '$.amazon_order_id'),"
+            " date, amount, description, linked_transaction_id "
+            "FROM transactions WHERE source = 'Amazon' AND profile = ?"
+            " AND json_extract(metadata, '$.csv') = ? ORDER BY id",
+            (profile, kind),
+        ):
+            stored[oid].append(
+                _StoredRow(tx_id, date, _cents(amount), desc, linked),
+            )
+        exported: dict[str, list[_ExportRow]] = defaultdict(list)
+        for row in rows:
+            exported[row.order_id].append(row)
+
+        txs: List[Transaction] = []
+        order_ids = list(exported) + [o for o in stored if o not in exported]
+        for oid in order_ids:
+            new = list(exported.get(oid, []))
+            gone = list(stored.get(oid, []))
+            for row in list(new):
+                match = next(
+                    (s for s in gone
+                     if s.date == row.date and s.amount == _cents(row.amount)),
+                    None,
+                )
+                if match is not None:
+                    gone.remove(match)
+                    new.remove(row)
+                    self._note_present(kind, row)
+            for row, old in self._pair_restated(new, gone):
+                self.db.restate_transaction(
+                    old.id, date=row.date, amount=row.amount,
+                    source_file_path=rel_path,
+                    source_file_sha256=file_sha,
+                    connection=connection,
+                )
+                self._count("restated")
+                link = (
+                    f"; linked to #{old.linked_transaction_id}, so "
+                    f"re-check that pair"
+                    if old.linked_transaction_id else ""
+                )
+                self._report(
+                    f"  ~ {label}: #{old.id} restated "
+                    f"{old.date} {old.amount} -> {row.date} "
+                    f"{_cents(row.amount)}, flagged for review{link}: "
+                    f"{old.description[:60]}"
+                )
+            if gone:
+                self._report_conflict(
+                    label, path, oid, new, gone, connection=connection,
+                )
+                continue
+            for row in new:
+                txs.append(self._insert(
+                    kind, row, profile, rel_path, file_sha,
+                    connection=connection,
+                ))
+        if txs:
+            self._report(f"  + {label}: {len(txs)} new")
+        return txs
+
+    @staticmethod
+    def _pair_restated(
+        new: List[_ExportRow], gone: List[_StoredRow],
+    ) -> list[tuple[_ExportRow, _StoredRow]]:
+        """Pair leftover export and stored rows of one Order ID.
+
+        A pair is unambiguous when one row of each side shares a date,
+        or when exactly one row of each side is left. Paired rows are
+        removed from both lists in place.
+        """
+        pairs = []
+        for date in sorted({row.date for row in new}):
+            on_new = [row for row in new if row.date == date]
+            on_gone = [s for s in gone if s.date == date]
+            if len(on_new) == 1 and len(on_gone) == 1:
+                pairs.append((on_new[0], on_gone[0]))
+                new.remove(on_new[0])
+                gone.remove(on_gone[0])
+        if len(new) == 1 and len(gone) == 1:
+            pairs.append((new.pop(), gone.pop()))
+        return pairs
+
+    def _report_conflict(
+        self, label: str, path: str, oid: str,
+        new: List[_ExportRow], gone: List[_StoredRow], *, connection,
+    ) -> None:
+        """Log an order whose rows cannot be settled automatically."""
+        for s in gone:
+            self.db.log_ingestion_error(
+                path, 0, f"{oid} #{s.id} {s.date} {s.amount}",
+                f"{label}: stored row #{s.id} is not in this export",
+                connection=connection,
+            )
+            self._report(
+                f"  ! {label}: order {oid}: stored #{s.id} "
+                f"{s.date} {s.amount} is not in this export: "
+                f"{s.description[:60]}"
+            )
+        for row in new:
+            self.db.log_ingestion_error(
+                path, row.line, f"{oid} {row.date} {row.amount}",
+                f"{label}: not inserted; order {oid} has stored rows "
+                f"this export no longer lists",
+                connection=connection,
+            )
+            self._report(
+                f"  ! {label}: order {oid}: export row {row.date} "
+                f"{_cents(row.amount)} not inserted, because the order "
+                f"has unmatched stored rows"
+            )
+        self._count("conflicts", len(gone) + len(new))
+
+    def _insert(
+        self, kind: str, row: _ExportRow, profile: str,
+        rel_path: str, file_sha: str, *, connection,
+    ) -> Transaction:
+        cat = "Shopping & Retail"
+        if self.intel:
+            cat, _ = self.intel.get_category(row.category_text, row.amount)
+            if cat == "Miscellaneous":
+                cat = "Shopping & Retail"
+        tx = Transaction(
+            date=row.date,
+            description=row.description,
+            amount=row.amount,
+            category=cat,
+            source="Amazon",
+            status="UNVERIFIED",
+            original_file=rel_path,
+            profile=profile,
+            needs_review=True,
+            metadata=json.dumps({
+                "amazon_order_id": row.order_id,
+                "csv": kind,
+            }),
+        )
+        self.db.add_transaction(
+            tx,
+            source_file_path=rel_path,
+            source_file_sha256=file_sha,
+            sidecar_path=None,
+            connection=connection,
+        )
+        return tx
 
     # ── Orders ─────────────────────────────────────────────────
 
@@ -184,18 +440,14 @@ class AmazonIngestor(Ingestor):
         orders_map: dict[str, str],
         *, connection,
     ) -> List[Transaction]:
-        rel_path = self._ws_relative(path)
-        file_sha = self.calculate_hash(path)
-        txs: List[Transaction] = []
-        with open(path, "r", encoding="utf-8") as f:
+        """One row per shipment line; an order may span several.
+
+        Two identical lines (the same item bought twice) are two rows;
+        `_sync_rows` compares rows as a multiset, so both land.
+        """
+        with open(path, "r", encoding="utf-8-sig") as f:
             reader = list(csv.DictReader(f))
-        # See cc/ingestor.py: a CSV can legitimately contain the same
-        # product/date/amount more than once (two separate orders of
-        # the same item). Track occurrences within this file so the
-        # Nth identical row is skipped only when the DB already holds
-        # N copies. (is_file_processed in ingest_profile guards
-        # re-ingesting the whole file.)
-        seen_in_file: dict[tuple, int] = {}
+        rows: List[_ExportRow] = []
         for i, row in enumerate(reader):
             try:
                 order_id = row["Order ID"]
@@ -213,57 +465,20 @@ class AmazonIngestor(Ingestor):
                 amount = Decimal(amt_str)
                 if amount == 0:
                     continue
-                date_raw = row["Order Date"].split("T")[0]
                 desc = f"Amazon: {product[:100]}"
-                key = (date_raw, desc, amount)
-                occurrence = seen_in_file.get(key, 0) + 1
-                seen_in_file[key] = occurrence
-                if not self.db.transaction_exists(
-                    desc, date_raw, amount, "Amazon",
-                    max_duplicates=occurrence, profile=profile,
-                    connection=connection,
-                ):
-                    cat = "Shopping & Retail"
-                    if self.intel:
-                        cat, _ = self.intel.get_category(desc, amount)
-                        if cat == "Miscellaneous":
-                            cat = "Shopping & Retail"
-                    tx = Transaction(
-                        date=date_raw,
-                        description=desc,
-                        amount=amount,
-                        category=cat,
-                        source="Amazon",
-                        status="UNVERIFIED",
-                        original_file=rel_path,
-                        profile=profile,
-                        needs_review=True,
-                        metadata=json.dumps({
-                            "amazon_order_id": order_id,
-                            "csv": "orders",
-                        }),
-                    )
-                    self.db.add_transaction(
-                        tx,
-                        source_file_path=rel_path,
-                        source_file_sha256=file_sha,
-                        sidecar_path=None,
-                        connection=connection,
-                    )
-                    txs.append(tx)
-                else:
-                    self._note_dup_skip("order", date_raw, amount, desc)
+                rows.append(_ExportRow(
+                    order_id, row["Order Date"].split("T")[0],
+                    amount, desc, desc, i + 2,
+                ))
             except (InvalidOperation, KeyError, ValueError) as e:
                 self.db.log_ingestion_error(
                     path, i + 2, str(row)[:200],
                     f"Order parse error: {e}",
                     connection=connection,
                 )
-        if txs:
-            self._report(
-                f"  + Amazon orders ({profile}): {len(txs)} new"
-            )
-        return txs
+        return self._sync_rows(
+            "orders", rows, path, profile, connection=connection,
+        )
 
     # ── Digital Content Orders ──────────────────────────────────
 
@@ -271,17 +486,13 @@ class AmazonIngestor(Ingestor):
         self, path: str, profile: str,
         *, connection,
     ) -> List[Transaction]:
-        """Aggregate Digital Content rows by Order ID; write one
-        transaction per order at the net Transaction Amount.
+        """Aggregate Digital Content rows by Order ID into one row
+        per order at the net Transaction Amount.
 
         Skips orders with non-USD currency, $0 net (free downloads,
         gift redemptions), or invalid amounts.
         """
-        rel_path = self._ws_relative(path)
-        file_sha = self.calculate_hash(path)
-        txs: List[Transaction] = []
-
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             reader = list(csv.DictReader(f))
 
         # First pass: bucket rows by Order ID, accumulating the net
@@ -339,10 +550,8 @@ class AmazonIngestor(Ingestor):
                     connection=connection,
                 )
 
-        # Second pass: emit one transaction per qualifying order.
-        # Multiplicity is tracked the same way as Order History so two
-        # legitimately-identical (date, desc, amount) orders both land.
-        seen_in_file: dict[tuple, int] = {}
+        # Second pass: one row per qualifying order.
+        rows: List[_ExportRow] = []
         for oid, o in orders.items():
             if o["skip"]:
                 continue
@@ -359,50 +568,12 @@ class AmazonIngestor(Ingestor):
                 )
                 continue
             desc = f"Amazon Digital: {o['product'][:100]}"
-            key = (o["date"], desc, net)
-            occurrence = seen_in_file.get(key, 0) + 1
-            seen_in_file[key] = occurrence
-            if self.db.transaction_exists(
-                desc, o["date"], net, "Amazon",
-                max_duplicates=occurrence, profile=profile,
-                connection=connection,
-            ):
-                self._note_dup_skip("digital", o["date"], net, desc)
-                continue
-            cat = "Shopping & Retail"
-            if self.intel:
-                cat, _ = self.intel.get_category(desc, net)
-                if cat == "Miscellaneous":
-                    cat = "Shopping & Retail"
-            tx = Transaction(
-                date=o["date"],
-                description=desc,
-                amount=net,
-                category=cat,
-                source="Amazon",
-                status="UNVERIFIED",
-                original_file=rel_path,
-                profile=profile,
-                needs_review=True,
-                metadata=json.dumps({
-                    "amazon_order_id": oid,
-                    "csv": "digital",
-                }),
-            )
-            self.db.add_transaction(
-                tx,
-                source_file_path=rel_path,
-                source_file_sha256=file_sha,
-                sidecar_path=None,
-                connection=connection,
-            )
-            txs.append(tx)
-
-        if txs:
-            self._report(
-                f"  + Amazon digital ({profile}): {len(txs)} new"
-            )
-        return txs
+            rows.append(_ExportRow(
+                oid, o["date"], net, desc, desc, o["first_line"],
+            ))
+        return self._sync_rows(
+            "digital", rows, path, profile, connection=connection,
+        )
 
     # ── Digital Returns ────────────────────────────────────────
 
@@ -410,8 +581,8 @@ class AmazonIngestor(Ingestor):
         self, path: str, profile: str,
         *, connection,
     ) -> List[Transaction]:
-        """Aggregate Digital Returns rows by Order ID; write one
-        refund transaction per order at the negated net amount.
+        """Aggregate Digital Returns rows by Order ID into one
+        refund row per order at the negated net amount.
 
         Mirrors `_ingest_digital_content`'s multi-row aggregation
         shape (Price Amount + Tax + optional Coupon/Promotion rows),
@@ -422,11 +593,7 @@ class AmazonIngestor(Ingestor):
         Skips orders with non-USD currency, $0 net, missing date, or
         invalid amounts.
         """
-        rel_path = self._ws_relative(path)
-        file_sha = self.calculate_hash(path)
-        txs: List[Transaction] = []
-
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             reader = list(csv.DictReader(f))
 
         orders: dict[str, dict] = defaultdict(
@@ -480,7 +647,7 @@ class AmazonIngestor(Ingestor):
                     connection=connection,
                 )
 
-        seen_in_file: dict[tuple, int] = {}
+        rows: List[_ExportRow] = []
         for oid, o in orders.items():
             if o["skip"]:
                 continue
@@ -498,53 +665,13 @@ class AmazonIngestor(Ingestor):
                 continue
             amount = -net  # refund credit ⇒ negative DB amount
             desc = f"Amazon Digital Refund: {o['product'][:100]}"
-            key = (o["date"], desc, amount)
-            occurrence = seen_in_file.get(key, 0) + 1
-            seen_in_file[key] = occurrence
-            if self.db.transaction_exists(
-                desc, o["date"], amount, "Amazon",
-                max_duplicates=occurrence, profile=profile,
-                connection=connection,
-            ):
-                self._note_dup_skip(
-                    "digital_refund", o["date"], amount, desc,
-                )
-                continue
-            cat = "Shopping & Retail"
-            if self.intel:
-                cat, _ = self.intel.get_category(desc, amount)
-                if cat == "Miscellaneous":
-                    cat = "Shopping & Retail"
-            tx = Transaction(
-                date=o["date"],
-                description=desc,
-                amount=amount,
-                category=cat,
-                source="Amazon",
-                status="UNVERIFIED",
-                original_file=rel_path,
-                profile=profile,
-                needs_review=True,
-                metadata=json.dumps({
-                    "amazon_order_id": oid,
-                    "csv": "digital_refunds",
-                }),
-            )
-            self.db.add_transaction(
-                tx,
-                source_file_path=rel_path,
-                source_file_sha256=file_sha,
-                sidecar_path=None,
-                connection=connection,
-            )
-            txs.append(tx)
-
-        if txs:
-            self._report(
-                f"  + Amazon digital refunds ({profile}): "
-                f"{len(txs)} new"
-            )
-        return txs
+            rows.append(_ExportRow(
+                oid, o["date"], amount, desc, desc, o["first_line"],
+            ))
+        return self._sync_rows(
+            "digital_refunds", rows, path, profile,
+            connection=connection,
+        )
 
     # ── Refunds ────────────────────────────────────────────────
 
@@ -553,14 +680,14 @@ class AmazonIngestor(Ingestor):
         orders_map: dict[str, str],
         *, connection,
     ) -> List[Transaction]:
-        rel_path = self._ws_relative(path)
-        file_sha = self.calculate_hash(path)
-        txs: List[Transaction] = []
-        with open(path, "r", encoding="utf-8") as f:
+        """One row per refund event; an order may have several.
+
+        The description borrows a product name from Order History, so
+        it is cosmetic (see AGENTS.md "Refund-row schema quirks").
+        """
+        with open(path, "r", encoding="utf-8-sig") as f:
             reader = list(csv.DictReader(f))
-        # Same multiplicity handling as orders: allow a CSV's own
-        # repeated refund rows while still deduping against the DB.
-        seen_in_file: dict[tuple, int] = {}
+        rows: List[_ExportRow] = []
         for i, row in enumerate(reader):
             try:
                 order_id = row["Order ID"]
@@ -573,79 +700,38 @@ class AmazonIngestor(Ingestor):
                 )
                 if amt_str.lower() == "not applicable" or not amt_str:
                     continue
-                amount = Decimal(amt_str)
-                date_raw = row["Refund Date"].split("T")[0]
+                amount = -Decimal(amt_str)
                 product = orders_map.get(order_id, "Unknown Product")
-                desc = f"Amazon REFUND: {product[:100]}"
-                key = (date_raw, desc, -amount)
-                occurrence = seen_in_file.get(key, 0) + 1
-                seen_in_file[key] = occurrence
-                if not self.db.transaction_exists(
-                    desc, date_raw, -amount, "Amazon",
-                    max_duplicates=occurrence, profile=profile,
-                    connection=connection,
-                ):
-                    cat = "Shopping & Retail"
-                    if self.intel:
-                        cat, _ = self.intel.get_category(
-                            f"Amazon: {product}", -amount,
-                        )
-                        if cat == "Miscellaneous":
-                            cat = "Shopping & Retail"
-                    tx = Transaction(
-                        date=date_raw,
-                        description=desc,
-                        amount=-amount,
-                        category=cat,
-                        source="Amazon",
-                        status="UNVERIFIED",
-                        original_file=rel_path,
-                        profile=profile,
-                        needs_review=True,
-                        metadata=json.dumps({
-                            "amazon_order_id": order_id,
-                            "csv": "refunds",
-                        }),
-                    )
-                    self.db.add_transaction(
-                        tx,
-                        source_file_path=rel_path,
-                        source_file_sha256=file_sha,
-                        sidecar_path=None,
-                        connection=connection,
-                    )
-                    txs.append(tx)
-                else:
-                    self._note_dup_skip("refund", date_raw, -amount, desc)
+                rows.append(_ExportRow(
+                    order_id, row["Refund Date"].split("T")[0], amount,
+                    f"Amazon REFUND: {product[:100]}",
+                    f"Amazon: {product}", i + 2,
+                ))
             except (InvalidOperation, KeyError, ValueError) as e:
                 self.db.log_ingestion_error(
                     path, i + 2, str(row)[:200],
                     f"Refund parse error: {e}",
                     connection=connection,
                 )
-        if txs:
-            self._report(
-                f"  + Amazon refunds ({profile}): {len(txs)} new"
-            )
-        return txs
+        return self._sync_rows(
+            "refunds", rows, path, profile, connection=connection,
+        )
 
     # ── Helpers ─────────────────────────────────────────────────
 
-    def _note_dup_skip(self, kind, date_raw, amount, desc) -> None:
-        """Record (and optionally print) a row suppressed by the
-        duplicate check. A non-zero count on a fresh ingest is worth
-        seeing — see prompts/reingest.md."""
-        self._dup_rows_skipped = getattr(self, "_dup_rows_skipped", 0) + 1
+    def _note_present(self, kind: str, row: _ExportRow) -> None:
+        """Count (and optionally print) an export row already stored."""
+        self._count("already_present")
         if getattr(self, "_verbose", False):
             self._report(
-                f"    ~ skip duplicate {kind} (already in DB): "
-                f"{date_raw}  {amount}  {desc[:48]}"
+                f"    = already stored ({kind}): {row.date}  "
+                f"{_cents(row.amount)}  {row.description[:48]}"
             )
 
     def _load_orders_map(
         self, path: str, orders_map: dict[str, str],
     ) -> None:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8-sig") as f:
             for row in csv.DictReader(f):
                 orders_map[row["Order ID"]] = row["Product Name"]
 
