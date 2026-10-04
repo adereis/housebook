@@ -26,6 +26,14 @@ housebook-amazon summary
 files (delivery photos, etc.), and writes a `_manifest.json`
 sidecar in the profile directory. No AI involvement needed.
 
+The export root is the folder that holds `Your Amazon Orders/`.
+Exports have arrived both with a wrapper folder and without one, so
+import looks for that folder rather than dropping the first path
+component. A zip without it, or with a data file outside the root,
+is refused before anything is written. Each newer export overwrites
+the profile's files in place. A file the new export lacks (such as
+an old `Cart History.csv`) simply stays, and ingest never reads it.
+
 ## What the ingestor reads
 
 `housebook-amazon ingest` walks each profile directory and reads

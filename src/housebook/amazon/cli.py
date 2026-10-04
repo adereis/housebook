@@ -9,7 +9,7 @@ import os
 import sqlite3
 import sys
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from housebook.config.settings import (
     DB_PATH,
@@ -20,14 +20,38 @@ AMAZON_DIR = str(Path(WORKSPACE_DIR) / "amazon")
 
 ALLOWED_EXTENSIONS = (".csv", ".json", ".xml", ".txt")
 
+# Every order export carries this folder, and the ingestor reads
+# Order History from inside it, so its parent is the export root.
+EXPORT_ANCHOR = "Your Amazon Orders"
+
 
 # ── import (unzip) ─────────────────────────────────────────────
+
+
+def _export_root(members: list[str]) -> tuple[str, ...] | None:
+    """Return the folder prefix that wraps the export, or None.
+
+    An export may arrive with a wrapper folder
+    (``Your Orders/Your Amazon Orders/...``) or without one
+    (``Your Amazon Orders/...``). The root is wherever the anchor
+    folder sits. Dropping the first path component blindly would
+    flatten the unwrapped layout into the profile root, where the
+    ingestor never looks, so a fresh export would ingest nothing.
+    """
+    roots = set()
+    for member in members:
+        parts = PurePosixPath(member).parts
+        if EXPORT_ANCHOR in parts[:-1]:
+            roots.add(parts[:parts.index(EXPORT_ANCHOR)])
+    return roots.pop() if len(roots) == 1 else None
 
 
 def cmd_import(args):
     """Unzip an Amazon data export into a profile directory.
 
     Deterministic import: unzip + manifest sidecar, no AI needed.
+    Every member is checked before anything is written, so a zip
+    that fails a check leaves the profile directory untouched.
     """
     zip_path = Path(args.zip_path).expanduser().resolve()
     if not zip_path.exists():
@@ -44,35 +68,43 @@ def cmd_import(args):
         sys.exit(1)
 
     dest = Path(AMAZON_DIR) / profile
-    dest.mkdir(parents=True, exist_ok=True)
 
-    extracted = 0
-    skipped = 0
     with zipfile.ZipFile(zip_path) as zf:
-        for member in zf.namelist():
-            if member.endswith("/"):
-                continue
-            ext = os.path.splitext(member)[1].lower()
-            if ext not in ALLOWED_EXTENSIONS:
-                skipped += 1
-                continue
-            # Strip the top-level zip directory if present
-            parts = Path(member).parts
-            if len(parts) > 1:
-                rel = str(Path(*parts[1:]))
-            else:
-                rel = member
-            target = dest / rel
+        files = [m for m in zf.namelist() if not m.endswith("/")]
+        data = [
+            m for m in files
+            if os.path.splitext(m)[1].lower() in ALLOWED_EXTENSIONS
+        ]
+        skipped = len(files) - len(data)
+
+        root = _export_root(data)
+        if root is None:
+            print(f"  Error: no single '{EXPORT_ANCHOR}/' folder in "
+                  f"{zip_path.name}; is this an Amazon order export?")
+            sys.exit(1)
+
+        plan = []
+        for member in data:
+            parts = PurePosixPath(member).parts
+            if parts[:len(root)] != root:
+                print(f"  Error: zip member lies outside the export "
+                      f"folder {'/'.join(root)!r}: {member!r}")
+                sys.exit(1)
+            target = dest.joinpath(*parts[len(root):])
             # Zip-slip guard: a member like "Export/../../x.csv" must
             # never write outside the profile directory.
             if not target.resolve().is_relative_to(dest.resolve()):
                 print(f"  Error: zip member escapes the profile "
                       f"directory: {member!r}")
                 sys.exit(1)
+            plan.append((member, target))
+
+        dest.mkdir(parents=True, exist_ok=True)
+        for member, target in plan:
             target.parent.mkdir(parents=True, exist_ok=True)
             with zf.open(member) as src, open(target, "wb") as dst:
                 dst.write(src.read())
-            extracted += 1
+    extracted = len(plan)
 
     print(
         f"  Extracted {extracted} file(s) to amazon/{profile}/ "

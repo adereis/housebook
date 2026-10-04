@@ -845,3 +845,69 @@ class TestAmazonDigitalReturns(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestAmazonImport(unittest.TestCase):
+    """`housebook-amazon import` places the export where ingest reads.
+
+    Regression: import always dropped the first path component as if
+    it were a wrapper folder. An export without one has paths that
+    start at `Your Amazon Orders/`, so Order History.csv landed in the
+    profile root, and ingest found nothing new to read.
+    """
+
+    ORDERS = "Your Amazon Orders/Order History.csv"
+    REFUNDS = "Your Returns & Refunds/Refund Details.csv"
+
+    def setUp(self):
+        import shutil
+        self.amazon_dir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.amazon_dir)
+        self.zip_path = os.path.join(self.amazon_dir, "export.zip")
+
+    def _zip(self, members):
+        import zipfile
+        with zipfile.ZipFile(self.zip_path, "w") as zf:
+            for name in members:
+                zf.writestr(name, "Order ID\n111-0000001-0000001\n")
+
+    def _import(self, profile="sterling"):
+        import argparse
+        from unittest import mock
+
+        from housebook.amazon import cli
+        args = argparse.Namespace(zip_path=self.zip_path, profile=profile)
+        with mock.patch.object(cli, "AMAZON_DIR", self.amazon_dir):
+            cli.cmd_import(args)
+        return os.path.join(self.amazon_dir, profile)
+
+    def test_export_without_wrapper_keeps_its_folders(self):
+        self._zip([self.ORDERS, self.REFUNDS, "Your Amazon Orders/a.jpeg"])
+        dest = self._import()
+        self.assertTrue(os.path.isfile(os.path.join(dest, self.ORDERS)))
+        self.assertTrue(os.path.isfile(os.path.join(dest, self.REFUNDS)))
+        self.assertFalse(
+            os.path.exists(os.path.join(dest, "Order History.csv")),
+        )
+
+    def test_export_with_wrapper_folder_is_unwrapped(self):
+        self._zip([f"Your Orders/{self.ORDERS}", f"Your Orders/{self.REFUNDS}"])
+        dest = self._import()
+        self.assertTrue(os.path.isfile(os.path.join(dest, self.ORDERS)))
+        self.assertTrue(os.path.isfile(os.path.join(dest, self.REFUNDS)))
+
+    def test_zip_without_order_folder_is_refused_untouched(self):
+        self._zip(["Order History.csv", "notes.txt"])
+        with self.assertRaises(SystemExit):
+            self._import()
+        self.assertFalse(
+            os.path.exists(os.path.join(self.amazon_dir, "sterling")),
+        )
+
+    def test_member_outside_export_root_is_refused_untouched(self):
+        self._zip([f"Your Orders/{self.ORDERS}", "stray.csv"])
+        with self.assertRaises(SystemExit):
+            self._import()
+        self.assertFalse(
+            os.path.exists(os.path.join(self.amazon_dir, "sterling")),
+        )
