@@ -171,6 +171,28 @@ Compute the SHA-256 with `sha256sum <file>` (or equivalent). The
 }
 ```
 
+### Several documents for one pharmacy fill
+
+One fill can leave several papers: the pharmacy bag receipt, the
+store register receipt, and the pharmacy's annual expense report.
+Ingest treats two receipts of the same amount as two services, so
+each would become its own expense. Give every sidecar for the fill
+the same `claim_id`, built from the Rx number and the fill date
+(`"RX1234567-2025-03-01"`). Ingest then links the later document to
+the first one's expense. Never use the Rx number alone, because
+refills share it.
+
+- Set `amount` to the prescription line, not the receipt total. A
+  register receipt's other lines (supplies, groceries) are not this
+  expense; describe them in `classifier_notes`.
+- A register receipt names no patient. Take the patient from the
+  pharmacy document whose Rx number, date and amount match, and say
+  so in `classifier_notes`.
+- When two files share a base name, tag the second one (for example
+  `__Register-Receipt`).
+- `ingest --dry-run` writes nothing, so it previews the second
+  document as a new expense. The real run links it.
+
 ### `data` block — EOB documents
 
 Extract financials from the PDF text. Look for these patterns:
