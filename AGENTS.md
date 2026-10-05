@@ -495,6 +495,10 @@ suite has no browser to catch them.
   focuses it when it opens. Watch open/closed rather than the object,
   because a modal whose detail loads later replaces its object, and
   refocusing then steals focus from a select the user just opened.
+- **A page that keeps filters in the hash listens for `hashchange`.**
+  `history.replaceState` fires no event. Back, Forward or an edited
+  address therefore change the hash without reloading, and the page
+  must re-read it.
 
 ### Dashboard asset build
 

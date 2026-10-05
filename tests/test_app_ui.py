@@ -88,5 +88,26 @@ class TestOverlays(unittest.TestCase):
         self.assertGreater(found, 0, "no overlay found; selector is stale")
 
 
+class TestUrlState(unittest.TestCase):
+    """A page that keeps its state in the hash follows hash changes."""
+
+    def test_pages_writing_the_hash_listen_for_hashchange(self):
+        """replaceState fires no event, so the page must listen itself.
+
+        Without the listener, Back, Forward or an edited address change
+        the hash while the screen keeps the old filters.
+        """
+        writers = [
+            path for path in _templates()
+            if "history.replaceState" in path.read_text()
+        ]
+        self.assertTrue(writers, "no page writes the hash; check is stale")
+        for path in writers:
+            with self.subTest(template=path.name):
+                self.assertTrue(
+                    "addEventListener('hashchange'" in path.read_text(),
+                    "writes the hash but never listens for hashchange")
+
+
 if __name__ == "__main__":
     unittest.main()

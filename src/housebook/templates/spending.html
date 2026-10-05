@@ -1342,8 +1342,36 @@
                     if (open) nextTick(() => manualOverlay.value?.focus());
                 });
 
+                // The hash is read once at load and rewritten with
+                // replaceState, which fires no event. Back, Forward or an
+                // edited address change it without reloading, so re-read
+                // it then, or the address and the screen disagree.
+                const applyUrlState = async () => {
+                    const s = loadFromUrl();
+                    view.value = s.view;
+                    Object.assign(filters.value, {
+                        startDate: s.startDate,
+                        endDate: s.endDate,
+                        category: s.category,
+                        search: s.search,
+                        source: s.source,
+                        tripId: s.tripId,
+                        onlyReview: s.onlyReview,
+                    });
+                    sortKey.value = s.sortKey;
+                    sortDir.value = s.sortDir;
+                    // The filters watcher resets the page on its flush;
+                    // restore the address's page after it has run.
+                    await nextTick();
+                    page.value = s.page;
+                };
+
                 // ==================== LIFECYCLE ====================
-                onMounted(() => { fetchData(); fetchManualExpenses(); });
+                onMounted(() => {
+                    fetchData();
+                    fetchManualExpenses();
+                    window.addEventListener('hashchange', applyUrlState);
+                });
 
                 return {
                     view, loading, selectedTx, showManualPanel, txOverlay, manualOverlay,

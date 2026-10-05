@@ -664,8 +664,20 @@
                 // ==================== WATCHERS ====================
                 watch(filters, () => { syncToUrl(); }, { deep: true });
 
+                // replaceState fires no event, so the hash changes only on
+                // Back, Forward or an edited address. Re-read it then, or
+                // the address and the screen disagree.
+                const applyUrlState = () => {
+                    const s = loadFromUrl();
+                    filters.value.startDate = s.startDate;
+                    filters.value.endDate = s.endDate;
+                };
+
                 // ==================== LIFECYCLE ====================
-                onMounted(() => { fetchData(); });
+                onMounted(() => {
+                    fetchData();
+                    window.addEventListener('hashchange', applyUrlState);
+                });
 
                 return {
                     loading, expandedTaxId,
