@@ -488,8 +488,8 @@
 {% raw %}
         <!-- ==================== TRANSACTION DETAIL MODAL ==================== -->
         <Transition name="modal-fade">
-            <div v-if="selectedTx" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="selectedTx = null">
-                <div class="fixed inset-0 bg-black/30"></div>
+            <div v-if="selectedTx" class="fixed inset-0 z-50 flex items-center justify-center p-4" @keydown.escape="selectedTx = null" tabindex="-1" ref="txOverlay">
+                <div class="fixed inset-0 bg-black/30" @click="selectedTx = null"></div>
                 <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto" @click.stop>
                     <button @click="selectedTx = null" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
                     <h2 class="text-lg font-bold text-gray-900 mb-4">Transaction Details</h2>
@@ -594,7 +594,7 @@
 
         <!-- ==================== MANUAL EXPENSES PANEL ==================== -->
         <Transition name="panel-slide">
-            <div v-if="showManualPanel" class="fixed inset-0 z-40">
+            <div v-if="showManualPanel" class="fixed inset-0 z-40" @keydown.escape="showManualPanel = false" tabindex="-1" ref="manualOverlay">
                 <div class="fixed inset-0 bg-black/20" @click="showManualPanel = false"></div>
                 <div class="fixed right-0 top-0 h-full w-full max-w-md bg-white shadow-2xl overflow-y-auto z-50 flex flex-col">
                     <!-- Panel Header -->
@@ -797,6 +797,8 @@
                 const loading = ref(true);
                 const selectedTx = ref(null);
                 const showManualPanel = ref(false);
+                const txOverlay = ref(null);
+                const manualOverlay = ref(null);
                 const addingManual = ref(false);
                 const editingExpense = ref(null);
 
@@ -1329,11 +1331,23 @@
 
                 watch(filteredTransactions, () => { if (view.value === 'spending') nextTick(updateCharts); }, { deep: true });
 
+                // An overlay closes on Escape only while focus is inside it.
+                // Watch open/closed, not the object: openTxModal replaces
+                // selectedTx once the detail loads, and refocusing then
+                // would pull focus out of a select the user just opened.
+                watch(() => selectedTx.value !== null, (open) => {
+                    if (open) nextTick(() => txOverlay.value?.focus());
+                });
+                watch(showManualPanel, (open) => {
+                    if (open) nextTick(() => manualOverlay.value?.focus());
+                });
+
                 // ==================== LIFECYCLE ====================
                 onMounted(() => { fetchData(); fetchManualExpenses(); });
 
                 return {
-                    view, loading, selectedTx, showManualPanel, addingManual, editingExpense,
+                    view, loading, selectedTx, showManualPanel, txOverlay, manualOverlay,
+                    addingManual, editingExpense,
                     allTransactions, categories, tripsList, tripSummaries, workTripSummaries, manualExpenses,
                     filters, sortKey, sortDir, page, pageSize, newExpense, datePresets,
                     activePreset, sources, hasActiveFilters, filteredTransactions, paginatedTransactions,

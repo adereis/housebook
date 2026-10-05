@@ -164,8 +164,8 @@
                     </div>
                 </div>
         <!-- Transaction detail modal (same pattern as /spending) -->
-        <div v-if="selectedTx" class="fixed inset-0 z-50 flex items-center justify-center p-4" @click.self="selectedTx = null">
-            <div class="fixed inset-0 bg-black/30"></div>
+        <div v-if="selectedTx" class="fixed inset-0 z-50 flex items-center justify-center p-4" @keydown.escape="selectedTx = null" tabindex="-1" ref="txOverlay">
+            <div class="fixed inset-0 bg-black/30" @click="selectedTx = null"></div>
             <div class="relative bg-white rounded-2xl shadow-2xl w-full max-w-4xl p-6 max-h-[90vh] overflow-y-auto" @click.stop>
                 <button @click="selectedTx = null" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 text-xl leading-none">&times;</button>
                 <h2 class="text-lg font-bold text-gray-900 mb-4">Transaction Details</h2>
@@ -498,13 +498,21 @@
                     } catch { selectedTx.value._loadingDoc = false; }
                 };
 
+                // Escape reaches the overlay only while focus is inside it.
+                // Watch open/closed, not the object, which openTxModal
+                // replaces once the detail loads.
+                const txOverlay = ref(null);
+                watch(() => selectedTx.value !== null, (open) => {
+                    if (open) nextTick(() => txOverlay.value?.focus());
+                });
+
                 return {
                     loading, trip, transactions, categories,
                     filterCategory, sortKey, sortDir,
                     duration, totalSpend, perDay, topCategory,
                     categoryBreakdown, filteredTransactions,
                     formatAmount, sortBy, toggleReview, updateCategory,
-                    selectedTx, openTxModal, isManualTx,
+                    selectedTx, openTxModal, isManualTx, txOverlay,
                 };
             }
         }).mount('#app');

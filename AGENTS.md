@@ -482,6 +482,20 @@ section in the same commit.
   slides out as well as in. Reduced-motion users get no animation, and
   the drawer closes immediately.
 
+### Dashboard interaction rules
+
+`tests/test_app_ui.py` checks these across every template, because the
+suite has no browser to catch them.
+
+- **Overlays close from the backdrop and from Escape.** The dim layer
+  covers the whole overlay, so it receives the click and must carry
+  the close handler. An `@click.self` on the overlay root never fires.
+  Escape reaches an overlay only while focus is inside it. So the root
+  has `@keydown.escape`, `tabindex="-1"` and a `ref`, and a watcher
+  focuses it when it opens. Watch open/closed rather than the object,
+  because a modal whose detail loads later replaces its object, and
+  refocusing then steals focus from a select the user just opened.
+
 ### Dashboard asset build
 
 Dashboard runtime assets are local and committed under
