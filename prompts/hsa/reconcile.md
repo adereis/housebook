@@ -86,9 +86,13 @@ housebook-hsa candidates --json
 
 This matches pending expenses (receipts/EOBs) against CC stubs
 using:
-- **Exact amount**: within $0.50
-- **Date proximity**: stub date within 14 days after expense
-  service date (covers posting lag)
+- **Exact amount**: equal to the cent (`AMOUNT_TOLERANCE` in
+  `hsa/matching.py`)
+- **Date proximity**: stub date from 5 days before to 45 days after
+  the expense service date (covers posting and billing lag). For a
+  monthly refill at the same price, that window also reaches the
+  next month's charge. Pair each receipt with the charge nearest the
+  provider's lag, not with the first one listed.
 - **Provider alias resolution**: via `config/hsa/providers.json`
 - **Billing lag heuristic**: prioritizes matches near the
   provider's `expected_billing_lag_days` (if configured)
