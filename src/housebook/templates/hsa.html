@@ -300,6 +300,10 @@
                                     <p class="text-[10px] text-blue-400">Statement</p>
                                     <p class="font-semibold text-blue-900 text-xs truncate">{{ detail.linked_transaction.original_file.split('/').pop() }}</p>
                                 </div>
+                                <div v-if="detail.expense.unclaimed_amount" class="col-span-2">
+                                    <p class="text-[10px] text-blue-400">Also paid by this charge, not claimed</p>
+                                    <p class="font-semibold text-blue-900">${{ formatAmount(detail.expense.unclaimed_amount) }} · {{ detail.expense.unclaimed_reason }}</p>
+                                </div>
                             </div>
                             <div v-if="detail.linked_transaction.original_file" class="mt-3">
                                 <div class="flex items-center gap-2">

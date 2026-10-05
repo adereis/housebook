@@ -18,7 +18,7 @@ from housebook.config.settings import (
 )
 from housebook.core import sidecar as sidecar_mod
 from housebook.hsa.matching import find_candidate_matches
-from housebook.hsa.math_proof import calculate_payment_math
+from housebook.hsa.math_proof import ProposedExpense, calculate_payment_math
 from housebook.hsa.providers import ProviderResolver
 
 LEVEL_STUB = "stub"
@@ -243,6 +243,7 @@ def cmd_list(args):
                    e.category, e.source, e.status,
                    e.needs_review, e.transaction_id,
                    e.evidence_level, e.exclusion_reason,
+                   e.unclaimed_amount, e.unclaimed_reason,
                    COUNT(d.id) AS doc_count
             FROM hsa_expenses e
             LEFT JOIN hsa_documents d ON d.expense_id = e.id
@@ -476,7 +477,7 @@ def cmd_check(args):
                     f"txn {proof.transaction_id} "
                     f"(${proof.transaction_amount:.2f}) != "
                     f"expenses {list(proof.expense_ids)} "
-                    f"(${proof.expense_total:.2f})"
+                    f"({proof.accounted_label})"
                 ),
             })
 
@@ -710,8 +711,39 @@ def cmd_scan(args):
 # ── verify ─────────────────────────────────────────────────────
 
 
+def _unclaimed_request(args):
+    """Validate ``--unclaimed``/``--unclaimed-reason``.
+
+    Returns ``(amount, reason)``. ``amount`` is None when the call
+    leaves the remainder alone and 0 when it clears it. Exits on a
+    malformed pair, before the database is opened.
+    """
+    amount = getattr(args, "unclaimed", None)
+    reason = getattr(args, "unclaimed_reason", None)
+    if amount is None:
+        if reason:
+            print("  --unclaimed-reason needs --unclaimed AMOUNT.")
+            sys.exit(1)
+        return None, None
+    amount = round(amount, 2)
+    if amount < 0:
+        print("  --unclaimed must not be negative.")
+        sys.exit(1)
+    if amount and not (reason and reason.strip()):
+        print(
+            "  --unclaimed needs --unclaimed-reason: an IRS reviewer "
+            "must see why part of the charge is not claimed."
+        )
+        sys.exit(1)
+    if not amount and reason:
+        print("  --unclaimed 0 clears the remainder; drop the reason.")
+        sys.exit(1)
+    return amount, (reason.strip() if amount else None)
+
+
 def cmd_verify(args):
     """Mark expenses as agent-verified."""
+    unclaimed, unclaimed_reason = _unclaimed_request(args)
     conn = _connect(args.db_path)
 
     ids = args.ids
@@ -721,7 +753,8 @@ def cmd_verify(args):
         f"SELECT id, category, patient, provider, "
         f"needs_review, evidence_level, transaction_id, "
         f"notes, payment_method, payment_date, plan_role, "
-        f"exclusion_reason, patient_responsibility "
+        f"exclusion_reason, patient_responsibility, "
+        f"unclaimed_amount, unclaimed_reason "
         f"FROM hsa_expenses "
         f"WHERE id IN ({placeholders})",
         ids,
@@ -738,6 +771,25 @@ def cmd_verify(args):
         # nothing — previously the category/patient/provider audit-log
         # INSERTs had already happened when a guard hit `continue`, so
         # the IRS-defense log recorded changes that were never applied.
+        # The link being created in this same call counts too:
+        # checking only the pre-update transaction_id let
+        # `--transaction-id X --evidence-level ready` on a
+        # previously-unlinked row bypass the math proof entirely.
+        effective_txn = args.transaction_id or row["transaction_id"]
+        projected_unclaimed = (
+            unclaimed if unclaimed is not None
+            else row["unclaimed_amount"]
+        ) or 0
+
+        # A remainder is a part of a card charge, so it needs one.
+        if unclaimed and not effective_txn:
+            print(
+                f"  Blocked: id={row['id']} has no linked card charge; "
+                f"an unclaimed remainder is part of one. Link it with "
+                f"--transaction-id."
+            )
+            continue
+
         if args.evidence_level:
             if (row["plan_role"] == "master"
                     and args.evidence_level in REIMBURSABLE_LEVELS):
@@ -749,18 +801,15 @@ def cmd_verify(args):
                 )
                 continue
 
-            # The link being created in this same call counts too:
-            # checking only the pre-update transaction_id let
-            # `--transaction-id X --evidence-level ready` on a
-            # previously-unlinked row bypass the math proof entirely.
-            effective_txn = args.transaction_id or row["transaction_id"]
             if (args.evidence_level in REIMBURSABLE_LEVELS
                     and effective_txn):
                 proof = calculate_payment_math(
                     conn,
                     effective_txn,
-                    proposed_expense=(
-                        row["id"], row["patient_responsibility"] or 0,
+                    proposed_expense=ProposedExpense(
+                        expense_id=row["id"],
+                        amount=row["patient_responsibility"] or 0,
+                        unclaimed=projected_unclaimed,
                     ),
                 )
                 if not proof.transaction_exists:
@@ -775,8 +824,10 @@ def cmd_verify(args):
                         f"  Blocked: id={row['id']} math proof "
                         f"fails — CC charge "
                         f"${proof.transaction_amount:.2f} != "
-                        f"expenses ${proof.expense_total:.2f}. "
-                        f"Fix amounts or link missing expenses."
+                        f"expenses {proof.accounted_label}. "
+                        f"Fix amounts, link missing expenses, or "
+                        f"declare what the charge also paid for "
+                        f"with --unclaimed."
                     )
                     continue
 
@@ -857,6 +908,20 @@ def cmd_verify(args):
                     row["exclusion_reason"], None,
                 )
                 updates.append("exclusion_reason = NULL")
+
+        if unclaimed is not None:
+            new_values = {
+                "unclaimed_amount": unclaimed or None,
+                "unclaimed_reason": unclaimed_reason,
+            }
+            # Field names come only from the literal dict above.
+            for field, new_value in new_values.items():
+                if row[field] != new_value:
+                    _log_change(
+                        conn, row["id"], field, row[field], new_value,
+                    )
+                    updates.append(f"{field} = ?")
+                    params.append(new_value)
 
         if row["needs_review"]:
             _log_change(conn, row["id"], "needs_review", "1", "0")
@@ -1895,6 +1960,18 @@ def main():
     p_ver.add_argument("--notes", type=str)
     p_ver.add_argument("--payment-method", type=str)
     p_ver.add_argument("--payment-date", type=str)
+    p_ver.add_argument(
+        "--unclaimed", type=float, metavar="AMOUNT",
+        help="Part of the linked card charge this expense does not "
+             "claim, such as supplies with no itemized receipt; it "
+             "counts toward the math proof, never toward the "
+             "reimbursable total (0 clears it)",
+    )
+    p_ver.add_argument(
+        "--unclaimed-reason", type=str, metavar="TEXT",
+        help="Why the remainder is not claimed (required with a "
+             "non-zero --unclaimed)",
+    )
     excl_group = p_ver.add_mutually_exclusive_group()
     excl_group.add_argument(
         "--exclude", type=str, metavar="REASON",

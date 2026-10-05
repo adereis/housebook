@@ -99,6 +99,8 @@ def _create_hsa_schema(db_path):
         evidence_level TEXT DEFAULT 'unverified',
         notes TEXT,
         exclusion_reason TEXT DEFAULT NULL,
+        unclaimed_amount REAL DEFAULT NULL,
+        unclaimed_reason TEXT DEFAULT NULL,
         payment_plan_id INTEGER REFERENCES hsa_payment_plans(id),
         plan_role TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -3125,6 +3127,212 @@ class TestMathProofGuard(unittest.TestCase):
         ]
         self.assertEqual(len(missing), 1)
         self.assertEqual(missing[0]["severity"], "error")
+
+
+class TestUnclaimedRemainder(unittest.TestCase):
+    """A card charge that paid for more than its receipt shows.
+
+    Shape: a $120.00 prescription receipt paid by a $123.45 charge
+    whose other $3.45 has no itemized receipt. The remainder is
+    declared on the expense, so the math proof balances while the
+    reimbursable total claims only the documented $120.00.
+    """
+
+    REASON = "supplies, no itemized receipt"
+
+    def setUp(self):
+        self.db_fd, self.db_path = tempfile.mkstemp()
+        _create_hsa_schema(self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            "INSERT INTO transactions "
+            "(id, date, description, amount, category, source, "
+            "status, original_file, needs_review) "
+            "VALUES (1, '2026-03-04', 'MAPLE PHARMACY', 123.45, "
+            "'Health & Medical', 'Amex', 'AGENT_VERIFIED', "
+            "'stmt.pdf', 0)"
+        )
+        conn.executemany(
+            "INSERT INTO hsa_expenses "
+            "(id, service_date, provider, patient, "
+            "patient_responsibility, source, status, needs_review, "
+            "transaction_id, evidence_level) "
+            "VALUES (?, '2026-03-01', 'Maple Pharmacy', 'sterling', "
+            "120.00, 'receipt', 'UNREIMBURSED', 1, ?, 'stub')",
+            [(1, 1), (2, None)],
+        )
+        conn.commit()
+        conn.close()
+
+    def tearDown(self):
+        os.close(self.db_fd)
+        os.unlink(self.db_path)
+
+    def _verify(self, ids, **overrides):
+        import io
+        from contextlib import redirect_stdout
+
+        from housebook.hsa.cli import cmd_verify
+
+        fields = {
+            "db_path": self.db_path, "ids": ids,
+            "category": None, "patient": None,
+            "provider": None, "evidence_level": None,
+            "transaction_id": None, "notes": None,
+            "payment_method": None, "payment_date": None,
+            "unclaimed": None, "unclaimed_reason": None,
+        }
+        fields.update(overrides)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cmd_verify(type("Args", (), fields)())
+        return out.getvalue()
+
+    def _row(self, expense_id):
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT evidence_level, unclaimed_amount, unclaimed_reason "
+            "FROM hsa_expenses WHERE id = ?",
+            (expense_id,),
+        ).fetchone()
+        conn.close()
+        return row
+
+    def _audit_fields(self, expense_id):
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT field_name FROM hsa_audit_log "
+            "WHERE record_id = ? ORDER BY id",
+            (expense_id,),
+        ).fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+
+    def _check_issues(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from housebook.hsa.cli import cmd_check
+
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cmd_check(type("Args", (), {
+                "db_path": self.db_path, "json_output": True,
+            })())
+        return [
+            i for i in json.loads(out.getvalue())["issues"]
+            if i["type"] == "math_proof_mismatch"
+        ]
+
+    def test_remainder_set_in_same_call_lets_ready_pass(self):
+        out = self._verify(
+            [1], evidence_level="ready",
+            unclaimed=3.45, unclaimed_reason=self.REASON,
+        )
+        self.assertIn("Verified 1", out)
+        self.assertEqual(self._row(1), ("ready", 3.45, self.REASON))
+        audit = self._audit_fields(1)
+        self.assertIn("unclaimed_amount", audit)
+        self.assertIn("unclaimed_reason", audit)
+
+    def test_reimbursable_total_claims_only_the_receipt(self):
+        import io
+        from contextlib import redirect_stdout
+
+        from housebook.hsa.cli import cmd_summary
+
+        self._verify(
+            [1], evidence_level="ready",
+            unclaimed=3.45, unclaimed_reason=self.REASON,
+        )
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cmd_summary(type("Args", (), {
+                "db_path": self.db_path, "json_output": True,
+                "year": None, "patient": None,
+            })())
+        summary = json.loads(out.getvalue())
+        self.assertAlmostEqual(summary["reimbursable_total"], 120.00)
+
+    def test_wrong_remainder_still_blocks_without_writes(self):
+        out = self._verify(
+            [1], evidence_level="ready",
+            unclaimed=2.00, unclaimed_reason=self.REASON,
+        )
+        self.assertIn("Blocked", out)
+        self.assertIn("$120.00 + unclaimed $2.00", out)
+        self.assertEqual(self._row(1), ("stub", None, None))
+        self.assertEqual(self._audit_fields(1), [])
+
+    def test_without_remainder_ready_is_blocked(self):
+        out = self._verify([1], evidence_level="ready")
+        self.assertIn("Blocked", out)
+        self.assertIn("--unclaimed", out)
+        self.assertEqual(self._row(1)[0], "stub")
+
+    def test_remainder_needs_a_reason(self):
+        with self.assertRaises(SystemExit):
+            self._verify([1], unclaimed=3.45)
+        with self.assertRaises(SystemExit):
+            self._verify([1], unclaimed=3.45, unclaimed_reason="  ")
+        with self.assertRaises(SystemExit):
+            self._verify([1], unclaimed_reason=self.REASON)
+        with self.assertRaises(SystemExit):
+            self._verify(
+                [1], unclaimed=-1.00, unclaimed_reason=self.REASON,
+            )
+        self.assertEqual(self._row(1), ("stub", None, None))
+        self.assertEqual(self._audit_fields(1), [])
+
+    def test_remainder_needs_a_linked_charge(self):
+        out = self._verify(
+            [2], unclaimed=3.45, unclaimed_reason=self.REASON,
+        )
+        self.assertIn("Blocked", out)
+        self.assertEqual(self._row(2), ("stub", None, None))
+        self.assertEqual(self._audit_fields(2), [])
+
+    def test_zero_clears_the_remainder(self):
+        self._verify([1], unclaimed=3.45, unclaimed_reason=self.REASON)
+        self._verify([1], unclaimed=0)
+        self.assertEqual(self._row(1), ("stub", None, None))
+        conn = sqlite3.connect(self.db_path)
+        cleared = conn.execute(
+            "SELECT old_value, new_value FROM hsa_audit_log "
+            "WHERE record_id = 1 AND field_name = 'unclaimed_amount' "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        conn.close()
+        self.assertEqual(cleared, ("3.45", None))
+
+    def test_check_counts_the_remainder(self):
+        self.assertEqual(len(self._check_issues()), 1)
+        self._verify([1], unclaimed=3.45, unclaimed_reason=self.REASON)
+        self.assertEqual(self._check_issues(), [])
+
+        self._verify([1], unclaimed=1.00, unclaimed_reason=self.REASON)
+        issues = self._check_issues()
+        self.assertEqual(len(issues), 1)
+        self.assertIn("$120.00 + unclaimed $1.00", issues[0]["message"])
+
+    def test_math_proof_projection_replaces_stored_remainder(self):
+        from housebook.hsa.math_proof import (
+            ProposedExpense,
+            calculate_payment_math,
+        )
+
+        self._verify([1], unclaimed=1.00, unclaimed_reason=self.REASON)
+        conn = sqlite3.connect(self.db_path)
+        stored = calculate_payment_math(conn, 1)
+        projected = calculate_payment_math(
+            conn, 1,
+            proposed_expense=ProposedExpense(1, 120.00, 3.45),
+        )
+        conn.close()
+        self.assertFalse(stored.balanced)
+        self.assertEqual(stored.unclaimed_total, 1.00)
+        self.assertTrue(projected.balanced)
+        self.assertEqual(projected.expense_ids, (1,))
 
 
 class TestHsaDocumentIntegrity(unittest.TestCase):

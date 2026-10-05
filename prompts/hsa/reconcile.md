@@ -143,6 +143,26 @@ blocks if the sum of all expenses linked to a CC transaction
 doesn't match the transaction amount. Fix amounts or link missing
 expenses first.
 
+### 4b'. Card charge larger than the receipt (unclaimed remainder)
+
+Signs: one receipt and one CC charge from the same provider on
+matching dates, with the charge a little higher. A pharmacy checkout
+that also paid for supplies or a store item is the common case. The
+candidate matcher requires equal amounts, so it never proposes these.
+Merge them by hand, and confirm the cause with the user before
+declaring the remainder.
+
+```bash
+housebook-hsa merge <receipt_id> <stub_id>
+housebook-hsa verify <receipt_id> --evidence-level ready \
+    --unclaimed 3.45 --unclaimed-reason "Supplies; no itemized receipt"
+```
+
+The receipt's amount is what gets claimed. The remainder balances the
+math proof and never counts toward the reimbursable total. Prefer an
+itemized receipt when the remainder is worth claiming: it becomes its
+own expense on the same charge, and nothing is left unclaimed.
+
 ### 4c. Payment plan (hospital installment billing)
 
 Signs: multiple CC stubs from the same provider, same amount,
@@ -184,6 +204,7 @@ After matching, set evidence levels. The decision tree:
 | EOB + Receipt + CC Statement | **strong** | `[✓+]` |
 | EOB + CC Statement | ready | `[✓]` |
 | Receipt (paid) + CC Statement | ready | `[✓]` |
+| Receipt + larger CC charge, remainder declared unclaimed | ready | `[✓]` |
 | EOB + Receipt (paid) | ready | `[✓]` |
 | CC stub only | stub | `[ ]` |
 | Receipt only | stub | `[ ]` |

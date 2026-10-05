@@ -60,6 +60,20 @@ audit-log entries, even for flags passed alongside `--evidence-level`
 in the same command. `verify` reports `Verified N of M` when some rows
 were blocked.
 
+**Unclaimed remainder** (migration 026). A card charge can pay for
+more than its receipt shows. For example, a pharmacy checkout pays
+for a prescription and also for supplies that have no itemized
+receipt. `verify <id> --unclaimed 3.45 --unclaimed-reason "..."`
+records that undocumented part on the expense
+(`unclaimed_amount`, `unclaimed_reason`). The math proof counts it
+toward the charge, so the receipt can reach `ready`. The reimbursable
+total never includes it, because it is not in
+`patient_responsibility`. Over-claiming stays impossible: a
+remainder must have a reason and a linked charge, and the proof must
+still balance to the cent. `--unclaimed 0` clears it. Set it on the
+surviving row after a merge. Merge does not carry it over, because a
+one-to-many merge would copy it into every target.
+
 **Demo data follows this table.** `housebook-demo-seed` writes a
 shoebox through `src/housebook/demo_hsa.py`, and it derives each demo
 expense's level from the sources on file using this table. Change the
