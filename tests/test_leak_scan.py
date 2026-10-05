@@ -14,11 +14,14 @@ from unittest.mock import patch
 
 from housebook import leak_scan
 from housebook.leak_scan import (
+    MESSAGE_PATH,
     Finding,
     is_allowed,
     load_allowlist,
     load_needles,
     scan,
+    scan_commits,
+    scan_message,
     scan_text,
 )
 from housebook.migrations.runner import run_migrations
@@ -89,6 +92,20 @@ class _Workspace(unittest.TestCase):
             "INSERT INTO manual_expenses (description, amount, category, "
             "start_date, frequency) VALUES ('Workmanship', 8765, "
             "'Home & Garden', '2025-06-01', 'one-time')",
+        )
+        conn.executemany(
+            "INSERT INTO trips (name, start_date, end_date, location) "
+            "VALUES (?, ?, ?, ?)",
+            [("Ledger Lisbon", "2025-07-08", "2025-07-20",
+              "Lisbon & Sintra, Portugal"),
+             ("Ledger Cabin", "2025-09-01", "2025-09-03", None)],
+        )
+        conn.execute(
+            "INSERT INTO hsa_documents (document_type, file_path, "
+            "file_hash, raw_data) VALUES ('receipt', 'r.pdf', 'abc', ?)",
+            (json.dumps({"rx": {"drug": "Quellinex 5mg/mL pen",
+                                "rx_number": "4417702",
+                                "ndc": "50000-1234-01"}}),),
         )
         conn.commit()
         conn.close()
@@ -167,6 +184,66 @@ class TestDetectors(_Workspace):
         """Parsers glue fare text onto passenger names, and
         `account.name` sometimes holds a card product."""
         self.assertEqual(self.kinds("PAID ECONOMY Blue Cash Preferred"), [])
+
+    def test_rx_and_ndc_numbers_are_identifiers(self):
+        found = self.kinds("Rx 4417702, NDC 50000-1234-01\n")
+        self.assertIn(("identifier", "4417702"), found)
+        self.assertIn(("identifier", "50000-1234-01"), found)
+
+    def test_drug_name_is_flagged_but_not_its_dose(self):
+        self.assertIn(("name (medications)", "QUELLINEX"),
+                      self.kinds("a QUELLINEX refill"))
+        self.assertEqual(self.kinds("5mg/mL pen"), [])
+
+
+class TestTrips(_Workspace):
+    """One attribute of a real trip may appear; two together may not."""
+
+    def test_exact_span_is_flagged_without_a_place(self):
+        found = self.kinds('("Vacation", "2025-07-08",\n "2025-07-20")')
+        self.assertIn(("trip dates", "2025-07-08..2025-07-20"), found)
+
+    def test_place_beside_a_month_of_the_trip_is_flagged(self):
+        for text in ("Lisbon, Jul 2025",
+                     "Sintra\nx\nx\n2025-07-15",
+                     "PORTUGAL on 15/07/2025",
+                     "July 9-12, 2025 in Lisbon",
+                     "--location Lisbon --start 2025-07"):
+            found = [k for k, _ in self.kinds(text)]
+            self.assertIn("trip place + month", found, text)
+
+    def test_place_alone_or_in_another_month_passes(self):
+        """A famous city or a country is too common to identify anyone,
+        and a fixture that moves the trip in time is fiction."""
+        for text in ("Lisbon", "Lisbon 2025-03-01", "Lisbon in 2025",
+                     "Portugal\nx\nx\nx\nx\nx\n2025-07-15"):
+            self.assertEqual(self.kinds(text), [], text)
+
+    def test_trip_without_location_is_noted(self):
+        """The scan says what it cannot check rather than skip it
+        silently."""
+        self.assertTrue(any("trips 2 have no location" in n
+                            for n in self.needles.notes))
+
+
+class TestMessages(_Workspace):
+    def test_findings_carry_the_message_path(self):
+        (f,) = scan_message("Trip to Lisbon in Jul 2025\n", self.needles, [])
+        self.assertEqual((f.path, f.kind), (MESSAGE_PATH, "trip place + month"))
+
+    def test_comments_and_verbose_diff_are_ignored(self):
+        """Git drops both before storing the message."""
+        text = ("fix(x): subject\n# claim 5550001234\n"
+                "# ------------------------ >8 ------------------------\n"
+                "+claim 5550001234\n")
+        self.assertEqual(scan_message(text, self.needles, []), [])
+
+    def test_allowlist_applies_to_messages(self):
+        self.assertEqual(
+            scan_message("thanks Quillfeather", self.needles,
+                         [(MESSAGE_PATH, "quillfeather")]),
+            [],
+        )
 
 
 class TestUnreadableWorkspace(_Workspace):
@@ -250,8 +327,54 @@ class TestGitSources(_Workspace):
             scan(self.repo, self.needles, [("LICENSE", "penny")]), [],
         )
 
+    def head(self):
+        return subprocess.run(
+            ["git", "-C", str(self.repo), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    def test_commits_scans_every_message_and_tree(self):
+        """A leak fixed in a later commit is still in history, and a
+        message is published as surely as a file."""
+        self.write("a.md", "claim 5550001234\n")
+        self.git("add", "a.md")
+        self.git("commit", "-q", "-m", "add notes")
+        first = self.head()
+        self.write("a.md", "fixed\n")
+        self.git("add", "a.md")
+        self.git("commit", "-q", "-m", "Lisbon trip, Jul 2025")
+        second = self.head()
+
+        found = scan_commits(self.repo, self.needles, [], ["HEAD"])
+        self.assertEqual(
+            sorted((sha, f.path, f.kind) for sha, f in found),
+            sorted([(first, "a.md", "identifier"),
+                    (second, MESSAGE_PATH, "trip place + month")]),
+        )
+
+    def test_commits_report_a_finding_once_at_its_origin(self):
+        self.write("a.md", "claim 5550001234\n")
+        self.git("add", "a.md")
+        self.git("commit", "-q", "-m", "one")
+        first = self.head()
+        self.write("b.md", "unrelated\n")
+        self.git("add", "b.md")
+        self.git("commit", "-q", "-m", "two")
+
+        found = scan_commits(self.repo, self.needles, [], ["HEAD"])
+        self.assertEqual([(sha, f.path) for sha, f in found],
+                         [(first, "a.md")])
+
 
 class TestMain(unittest.TestCase):
+    def test_commits_needs_rev_list_arguments(self):
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            leak_scan.main(["--commits"])
+
+    def test_one_target_at_a_time(self):
+        with patch("sys.stderr"), self.assertRaises(SystemExit):
+            leak_scan.main(["--rev", "HEAD", "--message", "m.txt"])
+
     def test_no_workspace_skips_cleanly(self):
         env = {k: v for k, v in os.environ.items()
                if k != "HOUSEBOOK_WORKSPACE_DIR"}

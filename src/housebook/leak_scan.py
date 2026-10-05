@@ -1,4 +1,5 @@
-"""Find real workspace data in the repository's tracked files.
+"""Find real workspace data in the repository's tracked files and commit
+messages.
 
 A denylist only catches strings someone already knows are private. The
 leaks that actually happen are copies: a real row becomes a fixture or
@@ -6,25 +7,37 @@ an SOP example, its people and companies are renamed, and its numbers
 stay. This scanner reads the live workspace read-only and reports any
 tracked text that reproduces it:
 
-- identifiers (Amazon order IDs, bank reference codes, claim, ticket
-  and agreement numbers) anywhere;
+- identifiers (Amazon order IDs, bank reference codes, claim, ticket,
+  agreement, Rx and NDC numbers) anywhere;
 - card last4 digits next to card context (``last4``, ``__1234__``, ``*``);
 - a date and an amount from the same real record within a few lines;
 - distinctive standalone amounts from medical, tax, statement-balance
   and off-ledger records;
 - names: the PII denylist, home location, patients, cardholders,
-  passengers, providers and tax issuers.
+  passengers, providers, medications and tax issuers;
+- trips: a trip's exact start and end dates together, or one of its
+  places next to a date in the trip's months.
 
-It scans the git index (what the next commit contains) by default, or
-the tree of any commit with ``--rev``. Findings that are intentional,
-such as the author's name in LICENSE, go in
-``$WORKSPACE/config/leak-scan-allow.txt`` as ``<path glob> <text>``.
+The threshold is one attribute of a real record versus two. A place
+alone ("Paris") or a date alone is common and identifies nothing, so
+fixtures may echo one. Two from the same record, such as a trip's
+place with its month, pin down when the household was away.
+
+It scans the git index (what the next commit contains) by default, the
+tree of any commit with ``--rev``, a commit message file with
+``--message`` (the commit-msg hook), or every commit in a ``git
+rev-list`` range, message and tree, with ``--commits`` (the pre-push
+hook). Findings that are intentional, such as the author's name in
+LICENSE, go in ``$WORKSPACE/config/leak-scan-allow.txt`` as ``<path
+glob> <text>``; a commit message's path is ``COMMIT_MSG``.
 """
 
 from __future__ import annotations
 
 import argparse
 import bisect
+import calendar
+import datetime
 import fnmatch
 import json
 import os
@@ -46,11 +59,19 @@ SKIPPED_PREFIXES = (
     "src/housebook/static/vendor/",
 )
 
+# The path a commit message is reported under, and matched against in
+# the allowlist.
+MESSAGE_PATH = "COMMIT_MSG"
+
 # Sidecar/metadata keys whose values identify one real document.
 IDENTIFIER_KEYS = {
     "account_number", "agreement_number", "amazon_order_id", "claim_id",
-    "member_id", "policy_number", "ticket_number", "trip_code",
+    "member_id", "ndc", "policy_number", "rx_number", "ticket_number",
+    "trip_code",
 }
+# Keys holding a medication ("<Drug> 2mg/mL pen"). Its first word is the
+# drug's name; the rest is dose and form, too generic to flag.
+DRUG_KEYS = {"drug"}
 # Keys whose values are people's names. Statement parsers write these as
 # "SURNAME/GIVEN ..." with fare text glued on ("DOE/PAID ECONOMY"), so
 # only the surname block is kept. Cardholder names are left to the
@@ -72,6 +93,39 @@ _BANK_REFERENCE = re.compile(r"\*([A-Z0-9]{8,})\b")
 _CARD_CONTEXT = ("last4", "last 4", "ending", "card", "acct", "account",
                  "*", "__", "xx")
 
+# Ways a text can name a month: 2026-04(-09), 04/09/2026 or 09/04/2026
+# (either order, since statements abroad print day first), and
+# "Apr 2026" / "April 9, 2026" / "Apr 9-28, 2026".
+_ISO_MONTH = re.compile(r"\b((?:19|20)\d\d)-([01]\d)\b")
+_NUMERIC_DATE = re.compile(r"\b([0-3]?\d)[/-]([0-3]?\d)[/-]((?:19|20)\d\d)\b")
+_MONTH_NUMBERS = {
+    name.lower(): number
+    for names in (calendar.month_name, calendar.month_abbr)
+    for number, name in enumerate(names) if name
+} | {"sept": 9}
+_NAMED_MONTH = re.compile(
+    r"\b(" + "|".join(sorted(_MONTH_NUMBERS, key=len, reverse=True)) + r")"
+    r"\.?\s+(?:[0-3]?\d(?:\s*[-–]\s*[0-3]?\d)?(?:st|nd|rd|th)?,?\s+)?"
+    r"((?:19|20)\d\d)\b",
+    re.IGNORECASE,
+)
+# A trip location such as "Rome & Florence, Italy" or "Raleigh, NC"
+# splits into places; state and country codes are too short to matter.
+_PLACE_SEPARATORS = re.compile(r"[,&/]")
+MIN_PLACE_LENGTH = 4
+
+
+@dataclass(frozen=True)
+class TripNeedle:
+    """A real trip: when the household was away, and where."""
+
+    trip_id: int
+    start: str | None
+    end: str | None
+    # (lowercase place, pattern) per place in the trip's location.
+    places: tuple[tuple[str, re.Pattern], ...]
+    months: frozenset[tuple[int, int]]
+
 
 @dataclass
 class Needles:
@@ -85,6 +139,9 @@ class Needles:
     last4: set[str] = field(default_factory=set)
     amounts: dict[Decimal, str] = field(default_factory=dict)
     dated: dict[tuple[str, Decimal], str] = field(default_factory=dict)
+    trips: list[TripNeedle] = field(default_factory=list)
+    # What the scan cannot check, reported so its coverage is visible.
+    notes: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -179,6 +236,9 @@ class _Collector:
                     self.needles.last4.add(str(value))
                 elif key in NAME_KEYS and isinstance(value, str):
                     self.name(value.split("/")[0], source)
+                elif key in DRUG_KEYS and isinstance(value, str):
+                    self.name(value.split()[0] if value.split() else "",
+                              "medications")
                 elif key in ("balances", "payment"):
                     self.walk(value, source, amounts=True)
                     continue
@@ -188,6 +248,27 @@ class _Collector:
                 self.walk(value, source, amounts)
         elif amounts and isinstance(node, (int, float)):
             self.amount(node, source)
+
+    def trip(self, trip_id, location, start, end) -> tuple[bool, bool]:
+        """Record a trip; return whether it has places and full dates."""
+        places = []
+        for part in _PLACE_SEPARATORS.split(location or ""):
+            place = " ".join(part.split())
+            if len(place) >= MIN_PLACE_LENGTH:
+                places.append((place.lower(), re.compile(
+                    rf"\b{re.escape(place)}\b", re.IGNORECASE)))
+        where = f"trip {trip_id}"
+        first, last = _iso_date(start, where), _iso_date(end, where)
+        months = set()
+        if first and last:
+            year, month = first.year, first.month
+            while (year, month) <= (last.year, last.month):
+                months.add((year, month))
+                year, month = year + month // 12, month % 12 + 1
+        self.needles.trips.append(TripNeedle(
+            trip_id, start if first else None, end if last else None,
+            tuple(places), frozenset(months)))
+        return bool(places), bool(months)
 
     def finish(self) -> Needles:
         for name, source in self._names.items():
@@ -221,6 +302,16 @@ def _json_column(value, where: str):
         return json.loads(value)
     except ValueError as e:
         raise SystemExit(f"housebook-leak-scan: {where} is not JSON: {e}")
+
+
+def _iso_date(value, where: str) -> datetime.date | None:
+    """Parse an optional YYYY-MM-DD column, failing loudly when malformed."""
+    if not value:
+        return None
+    try:
+        return datetime.date.fromisoformat(str(value)[:10])
+    except ValueError as e:
+        raise SystemExit(f"housebook-leak-scan: {where} has a bad date: {e}")
 
 
 def load_needles(workspace: Path, db_path: Path) -> Needles:
@@ -327,6 +418,26 @@ def _load_database(c: _Collector, db_path: Path):
                 tree = _json_column(raw, f"{source} raw_data")
                 if tree is not None:
                     c.walk(tree, source, amounts=True)
+        if "trips" in tables:
+            unplaced, undated = [], []
+            for trip_id, location, start, end in conn.execute(
+                "SELECT id, location, start_date, end_date FROM trips "
+                "ORDER BY id"
+            ):
+                has_places, has_dates = c.trip(trip_id, location, start, end)
+                if not has_places:
+                    unplaced.append(str(trip_id))
+                if not has_dates:
+                    undated.append(str(trip_id))
+            if unplaced:
+                c.needles.notes.append(
+                    f"trips {', '.join(unplaced)} have no location, so no "
+                    f"place of theirs is checked. Set one with "
+                    f"`housebook-audit edit-trip <id> --location ...`.")
+            if undated:
+                c.needles.notes.append(
+                    f"trips {', '.join(undated)} lack a start or end "
+                    f"date, so their dates are not checked.")
     finally:
         conn.close()
 
@@ -341,10 +452,10 @@ def _git(repo: Path, *args: str, stdin: bytes | None = None) -> bytes:
     ).stdout
 
 
-def tracked_texts(repo: Path, rev: str | None = None) -> dict[str, str]:
-    """Return {path: text} for the index (default) or a commit's tree.
+def _tree_blobs(repo: Path, rev: str | None = None) -> dict[str, str]:
+    """Return {path: blob sha} for the index (default) or a commit's tree.
 
-    Binary blobs, submodules and generated/vendored files are skipped.
+    Submodules and generated/vendored files are left out.
     """
     blobs: dict[str, str] = {}
     if rev is None:
@@ -361,12 +472,17 @@ def tracked_texts(repo: Path, rev: str | None = None) -> dict[str, str]:
                 _mode, kind, sha = meta.split()
                 if kind == b"blob":
                     blobs[path.decode()] = sha.decode()
-    blobs = {
+    return {
         path: sha for path, sha in blobs.items()
         if not path.startswith(SKIPPED_PREFIXES)
     }
 
-    shas = list(dict.fromkeys(blobs.values()))
+
+def _cat_objects(repo: Path, shas) -> dict[str, bytes]:
+    """Return {sha: raw content} for git objects, in one batch call."""
+    shas = list(dict.fromkeys(shas))
+    if not shas:
+        return {}
     batch = _git(repo, "cat-file", "--batch",
                  stdin=("\n".join(shas) + "\n").encode())
     contents: dict[str, bytes] = {}
@@ -376,13 +492,27 @@ def tracked_texts(repo: Path, rev: str | None = None) -> dict[str, str]:
         size = int(batch[pos:header_end].split()[2])
         contents[sha] = batch[header_end + 1:header_end + 1 + size]
         pos = header_end + 1 + size + 1
+    return contents
 
-    texts = {}
-    for path, sha in sorted(blobs.items()):
-        data = contents[sha]
-        if b"\0" not in data:
-            texts[path] = data.decode("utf-8", errors="replace")
-    return texts
+
+def _blob_texts(repo: Path, shas) -> dict[str, str]:
+    """Return {sha: text} for blobs, leaving binary ones out."""
+    return {
+        sha: data.decode("utf-8", errors="replace")
+        for sha, data in _cat_objects(repo, shas).items()
+        if b"\0" not in data
+    }
+
+
+def tracked_texts(repo: Path, rev: str | None = None) -> dict[str, str]:
+    """Return {path: text} for the index (default) or a commit's tree.
+
+    Binary blobs, submodules and generated/vendored files are skipped.
+    """
+    blobs = _tree_blobs(repo, rev)
+    texts = _blob_texts(repo, blobs.values())
+    return {path: texts[sha] for path, sha in sorted(blobs.items())
+            if sha in texts}
 
 
 # ── matching ────────────────────────────────────────────────────────
@@ -397,6 +527,59 @@ def _line_amounts(line: str) -> list[tuple[Decimal, str]]:
         if amount is not None:
             found.append((amount, match.group().strip()))
     return found
+
+
+def _line_months(line: str) -> set[tuple[int, int]]:
+    """The (year, month) pairs a line names, in any common date format."""
+    months = {(int(y), int(m)) for y, m in _ISO_MONTH.findall(line)}
+    for first, second, year in _NUMERIC_DATE.findall(line):
+        months |= {(int(year), int(n)) for n in (first, second)}
+    for name, year in _NAMED_MONTH.findall(line):
+        months.add((int(year), _MONTH_NUMBERS[name.lower()]))
+    return {(y, m) for y, m in months if 1 <= m <= 12}
+
+
+def _trip_findings(path: str, text: str, lines: list[str],
+                   line_starts: list[int], lowered: str,
+                   trips: list[TripNeedle]) -> list[Finding]:
+    """A trip's exact span, or one of its places beside one of its months.
+
+    Either pins down when the household was away. A place or a date on
+    its own does not, and fixtures may use one.
+    """
+    findings: list[Finding] = []
+    months_by_line: dict[int, set[tuple[int, int]]] = {}
+
+    def months_near(i: int) -> set[tuple[int, int]]:
+        near = set()
+        for j in range(max(0, i - PAIR_WINDOW),
+                       min(len(lines), i + PAIR_WINDOW + 1)):
+            if j not in months_by_line:
+                months_by_line[j] = _line_months(lines[j])
+            near |= months_by_line[j]
+        return near
+
+    for trip in trips:
+        source = f"trip {trip.trip_id}"
+        if trip.start and trip.end and trip.start in text and trip.end in text:
+            for i, line in enumerate(lines):
+                window = lines[max(0, i - PAIR_WINDOW):i + PAIR_WINDOW + 1]
+                if trip.start in line and any(trip.end in w for w in window):
+                    findings.append(Finding(
+                        path, i + 1, "trip dates",
+                        f"{trip.start}..{trip.end}", source))
+        for place, pattern in trip.places:
+            if place not in lowered:
+                continue
+            for match in pattern.finditer(text):
+                i = bisect.bisect_right(line_starts, match.start()) - 1
+                shared = months_near(i) & trip.months
+                if shared:
+                    year, month = min(shared)
+                    findings.append(Finding(
+                        path, i + 1, "trip place + month",
+                        f"{match.group()} {year}-{month:02d}", source))
+    return findings
 
 
 def scan_text(path: str, text: str, needles: Needles) -> list[Finding]:
@@ -448,6 +631,9 @@ def scan_text(path: str, text: str, needles: Needles) -> list[Finding]:
                 if source:
                     findings.append(Finding(path, n, "date + amount",
                                             f"{date} {shown}", source))
+
+    findings += _trip_findings(path, text, lines, line_starts, lowered,
+                               needles.trips)
     return findings
 
 
@@ -482,16 +668,81 @@ def scan(repo: Path, needles: Needles, allowlist: list[tuple[str, str]],
     return list(dict.fromkeys(findings))
 
 
+# `git commit --verbose` appends the diff below this line; git drops it,
+# and the staged files are the pre-commit scan's job.
+_SCISSORS = "# ------------------------ >8 ------------------------"
+
+
+def scan_message(text: str, needles: Needles,
+                 allowlist: list[tuple[str, str]]) -> list[Finding]:
+    """Scan a commit message as git will store it, without '#' comments."""
+    kept = []
+    for line in text.splitlines():
+        if line == _SCISSORS:
+            break
+        if not line.startswith("#"):
+            kept.append(line)
+    return [
+        f for f in dict.fromkeys(scan_text(MESSAGE_PATH, "\n".join(kept),
+                                           needles))
+        if not is_allowed(f, allowlist)
+    ]
+
+
+def scan_commits(repo: Path, needles: Needles,
+                 allowlist: list[tuple[str, str]],
+                 rev_args: list[str]) -> list[tuple[str, Finding]]:
+    """Scan the message and tree of every commit `git rev-list` lists.
+
+    Each finding is reported once, against the oldest commit that has
+    it. A file is read only in the commits that change it.
+    """
+    shas = _git(repo, "rev-list", "--topo-order", "--reverse",
+                *rev_args).decode().split()
+    commits = _cat_objects(repo, shas)
+    seen_blobs: set[tuple[str, str]] = set()
+    reported: dict[tuple[str, str, str], tuple[str, Finding]] = {}
+    for sha in shas:
+        _headers, _, message = commits[sha].partition(b"\n\n")
+        found = scan_message(message.decode("utf-8", errors="replace"),
+                             needles, allowlist)
+        blobs = {pair for pair in _tree_blobs(repo, sha).items()
+                 if pair not in seen_blobs}
+        seen_blobs |= blobs
+        texts = _blob_texts(repo, (blob for _, blob in blobs))
+        for path, blob in sorted(blobs):
+            if blob in texts:
+                found += [f for f in scan_text(path, texts[blob], needles)
+                          if not is_allowed(f, allowlist)]
+        for f in found:
+            reported.setdefault((f.path, f.kind, f.text.lower()), (sha, f))
+    return list(reported.values())
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="housebook-leak-scan",
-        description="Report real workspace data found in tracked files.",
+        description="Report real workspace data found in tracked files "
+                    "and commit messages.",
     )
-    parser.add_argument(
+    target = parser.add_mutually_exclusive_group()
+    target.add_argument(
         "--rev",
         help="scan this commit's tree instead of the index (staged content)",
     )
+    target.add_argument(
+        "--message", metavar="FILE",
+        help="scan a commit message file (the commit-msg hook)",
+    )
+    target.add_argument(
+        "--commits", nargs=argparse.REMAINDER, metavar="REV",
+        help="scan the message and tree of every commit that `git rev-list "
+             "REV...` lists, e.g. `--commits origin/main..HEAD` (the "
+             "pre-push hook); everything after it goes to git rev-list",
+    )
     args = parser.parse_args(argv)
+    if args.commits == []:
+        parser.error("--commits needs git rev-list arguments")
 
     load_dotenv()
     if not os.environ.get("HOUSEBOOK_WORKSPACE_DIR", "").strip():
@@ -502,17 +753,35 @@ def main(argv: list[str] | None = None) -> int:
 
     needles = load_needles(settings.WORKSPACE_DIR, Path(settings.DB_PATH))
     allowlist_path = settings.CONFIG_DIR / "leak-scan-allow.txt"
-    findings = scan(settings.PROJECT_ROOT, needles,
-                    load_allowlist(allowlist_path), args.rev)
-    for f in findings:
-        print(f"{f.path}:{f.line}: {f.kind}: {f.text}  [{f.source}]")
-    target = args.rev or "index"
-    if findings:
-        print(f"\n{len(findings)} finding(s) in {target}. Replace real "
-              f"values with invented ones; list intentional ones in "
-              f"{allowlist_path} as '<path glob> <text>'.", file=sys.stderr)
+    allowlist = load_allowlist(allowlist_path)
+    for note in needles.notes:
+        print(f"housebook-leak-scan: note: {note}", file=sys.stderr)
+
+    if args.commits:
+        located = scan_commits(settings.PROJECT_ROOT, needles, allowlist,
+                               args.commits)
+        target_name = "those commits"
+    elif args.message:
+        text = Path(args.message).read_text(encoding="utf-8",
+                                            errors="replace")
+        located = [(None, f) for f in scan_message(text, needles, allowlist)]
+        target_name = "the commit message"
+    else:
+        located = [(None, f) for f in scan(settings.PROJECT_ROOT, needles,
+                                           allowlist, args.rev)]
+        target_name = args.rev or "index"
+    for sha, f in located:
+        where = f"{sha[:10]} " if sha else ""
+        print(f"{where}{f.path}:{f.line}: {f.kind}: {f.text}  [{f.source}]")
+    if located:
+        print(f"\n{len(located)} finding(s) in {target_name}. Replace real "
+              f"values with invented ones, and describe a problem's shape "
+              f"rather than the household event behind it (AGENTS.md, "
+              f"'Fictitious Data Only'). List intentional ones in "
+              f"{allowlist_path} as '<path glob> <text>'; a commit "
+              f"message's path is {MESSAGE_PATH}.", file=sys.stderr)
         return 1
-    print(f"No workspace data found in {target}.", file=sys.stderr)
+    print(f"No workspace data found in {target_name}.", file=sys.stderr)
     return 0
 
 

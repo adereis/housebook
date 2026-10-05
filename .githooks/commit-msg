@@ -1,32 +1,28 @@
 #!/bin/bash
-# commit-msg hook: PII denylist scan
+# commit-msg hook: workspace leak scan of the commit message
+#
+# A message is published with the code. housebook-leak-scan checks it
+# against the same real data as the staged files: the PII denylist,
+# names, identifiers, amounts and trip dates/places.
 
-COMMIT_MSG_FILE=$1
-COMMIT_SOURCE=$2
+exec 1>&2
 
-# --- Check 1: PII denylist ---
-if [ "$PII_ALLOW" != "true" ]; then
-    DENYLIST="${HOUSEBOOK_WORKSPACE_DIR:+$HOUSEBOOK_WORKSPACE_DIR/config/pii-denylist.txt}"
+if [ "$PII_ALLOW" = "true" ]; then
+    echo "⚠️  Message leak scan skipped (PII_ALLOW=true)."
+    exit 0
+fi
 
-    if [ -n "$DENYLIST" ] && [ -f "$DENYLIST" ]; then
-        PATTERNS=$(grep -v '^\s*#' "$DENYLIST" | grep -v '^\s*$' | paste -sd'|')
-        if [ -n "$PATTERNS" ]; then
-            HITS=$(grep -v '^#' "$COMMIT_MSG_FILE" | grep -inE "$PATTERNS")
-            if [ -n "$HITS" ]; then
-                exec 1>&2
-                echo ""
-                echo "❌ PII denylist match in commit message:"
-                echo "$HITS"
-                echo ""
-                echo "Denylist: $DENYLIST"
-                echo "Override: PII_ALLOW=true git commit ..."
-                exit 1
-            fi
-        fi
-        echo "✅ Commit message PII check passed." >&2
-    fi
-else
-    echo "⚠️  PII denylist check skipped (PII_ALLOW=true)." >&2
+SCANNER="$(git rev-parse --show-toplevel)/.venv/bin/housebook-leak-scan"
+if [ ! -x "$SCANNER" ]; then
+    echo "❌ $SCANNER not found. Run ./bootstrap.sh (or pip install -e .)."
+    echo "Override: PII_ALLOW=true git commit ..."
+    exit 1
+fi
+if ! "$SCANNER" --message "$1"; then
+    echo ""
+    echo "❌ Real workspace data in the commit message (see above)."
+    echo "Override: PII_ALLOW=true git commit ..."
+    exit 1
 fi
 
 exit 0

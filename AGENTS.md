@@ -559,22 +559,51 @@ Agent review step and produces unreliable data.
   surely as a name does. When a bug surfaces on live data, reproduce its
   *shape* with invented values (e.g. "$100 split 33.33/33.33/33.34"), never
   its figures.
-- **Leak scan (pre-commit)**: `housebook-leak-scan` compares the git index
-  against the live workspace, opened read-only. It reports the PII
-  denylist (`$WORKSPACE/config/pii-denylist.txt`), home location and known
-  names, real identifiers (order, claim, ticket and bank reference codes),
-  card last4 beside card context, a real date + amount within 4 lines,
-  and distinctive standalone amounts from medical, tax, balance and
-  off-ledger records. The pre-commit hook runs it on every commit; it
-  skips cleanly when no workspace is configured. Intentional matches
-  (the author's name in `LICENSE`) go in
+  **One attribute of a real record may appear; two may not.** A city the
+  household visited, a date, or a store chain identifies nothing on its
+  own. Two from the same record identify it: a trip's place with its
+  month, a date with its amount, a provider with a visit. So a fixture
+  may keep "Italy" if it moves the trip to another month, and must not
+  keep the trip's real dates.
+  **Commit messages and design notes are published too.** The honest
+  *why* of a change is often a household event, such as a trip, a family
+  visit or a prescription. Describe the problem's shape instead of the
+  event. Write "a card billed in a foreign currency", not "the family
+  trip to Brazil". Write "one traveler arrived before the rest", not who
+  arrived when. Leave out counts, dates, places, people and subscriptions
+  taken from the workspace. Health details stay private even one at a
+  time: a condition, a drug, a provider's name, or how often someone
+  gets care ("weekly therapy"). Test each sentence by asking whether it
+  tells a stranger something about this household.
+- **Leak scan (hooks)**: `housebook-leak-scan` compares what is about to
+  be published against the live workspace, opened read-only. It reports
+  the PII denylist (`$WORKSPACE/config/pii-denylist.txt`), home location
+  and known names (patients, providers, medications), real identifiers
+  (order, claim, ticket, Rx, NDC and bank reference codes), card last4
+  beside card context, a real date + amount within 4 lines, distinctive
+  standalone amounts from medical, tax, balance and off-ledger records,
+  and trips: a trip's exact start and end dates together, or one of its
+  places within 4 lines of a date in the trip's months. Three hooks run
+  it, and each skips cleanly when no workspace is configured:
+  - pre-commit scans the index;
+  - commit-msg scans the message (`--message`);
+  - pre-push scans the message and tree of every commit the remote lacks
+    (`--commits <sha> --not --remotes=<remote>`). It is the only one that
+    sees commits written by a rebase, a cherry-pick or `--no-verify`.
+
+  Intentional matches (the author's name in `LICENSE`) go in
   `$WORKSPACE/config/leak-scan-allow.txt` as `<path glob> <text>`, never
-  in the repo. An invented fixture value that happens to equal a real
-  one is simplest to fix by picking another value; allowlist a
-  coincidence only when the value must stay. `--rev <commit>` scans any
-  commit's tree, which is how to audit history. Names that live only in
-  free text (a contractor on a manual expense) cannot be derived: add
-  them to the denylist.
+  in the repo; a commit message's path is `COMMIT_MSG`. An invented
+  fixture value that happens to equal a real one is simplest to fix by
+  picking another value; allowlist a coincidence only when the value
+  must stay. `--commits HEAD` audits all of history, and `--rev
+  <commit>` one commit's tree. Some names cannot be derived without
+  noise, and those go in the denylist: names in free text (a contractor
+  on a manual expense), a provider's short name, a family member's home
+  town. The scan prints a note for what it cannot check, such as a trip
+  with no location. No scanner catches a story, though: "one traveler
+  arrived a week early" matches nothing, so the message guidance above
+  is the primary guard.
 - **Imports**: Always use absolute package imports (e.g., `from housebook.core...`).
 - **Running venv commands**: Use `.venv/bin/<command>` directly (e.g., `.venv/bin/housebook-audit pending`, `.venv/bin/python3 -c "..."`). Do NOT use `source .venv/bin/activate` — it triggers unnecessary confirmation prompts in AI agent tool harnesses. `./test.sh` handles PATH internally and needs no prefix.
 - **Temporary Scripts**: Never create auxiliary or temporary scripts in the project root. Use the system `/tmp` directory or `~/tmp` for transient execution tasks.
@@ -585,6 +614,8 @@ Agent review step and produces unreliable data.
 We follow high-signal semantic commits with strict formatting for readability in CLI tools.
 - **Header**: `<type>(<scope>): <subject>` (Subject MUST be < 50 characters).
 - **Body**: Wrap lines at **72 characters**. Explain **Why** the change was needed and the **Rational** behind the implementation choices.
+  Tell the why as the problem's shape, never as the household event that
+  surfaced it: the repo is public (see *Fictitious Data Only*).
 - **Bullet Points**: Use for granular lists of **What** changed.
 - **Co-Authorship**: Commits implemented by an AI agent MUST include a
   trailing `Co-Authored-By:` line identifying the agent that actually

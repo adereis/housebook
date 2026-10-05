@@ -1,0 +1,40 @@
+#!/bin/bash
+# pre-push hook: workspace leak scan of every outgoing commit
+#
+# pre-commit and commit-msg see a commit only when `git commit` makes
+# it. A rebase, cherry-pick or --no-verify writes commits without them,
+# so this is the one check that sees everything about to be published:
+# the message and tree of each commit the remote does not have yet.
+
+exec 1>&2
+
+if [ "$PII_ALLOW" = "true" ]; then
+    echo "⚠️  Push leak scan skipped (PII_ALLOW=true)."
+    exit 0
+fi
+
+SCANNER="$(git rev-parse --show-toplevel)/.venv/bin/housebook-leak-scan"
+if [ ! -x "$SCANNER" ]; then
+    echo "❌ $SCANNER not found. Run ./bootstrap.sh (or pip install -e .)."
+    echo "Override: PII_ALLOW=true git push ..."
+    exit 1
+fi
+
+remote="$1"
+status=0
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one per ref.
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+    if [[ "$local_sha" =~ ^0+$ ]]; then
+        continue  # deleting a remote ref publishes nothing
+    fi
+    if ! "$SCANNER" --commits "$local_sha" --not --remotes="$remote"; then
+        status=1
+    fi
+done
+
+if [ "$status" -ne 0 ]; then
+    echo ""
+    echo "❌ Real workspace data in commits about to be pushed (see above)."
+    echo "Override: PII_ALLOW=true git push ..."
+fi
+exit $status
