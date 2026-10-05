@@ -95,7 +95,8 @@ Use `housebook-audit verify` to batch-process decisions. The command enforces th
     - Leave as is for the user to decide in the UI.
 
 ## Step 4: Rule Hardening
-- Every time you verify a merchant, check if a general rule exists. If not, add it to `config/rules.json`. It is the only rule store; web UI corrections never create rules.
+- When you verify a merchant that will recur, check if a general rule exists. If not, add it to `config/rules.json`. It is the only rule store; web UI corrections never create rules.
+- **Skip merchants that will not recur.** A trip abroad, a card imported only for a trip, or a one-time purchase adds nothing worth a rule. Their verified rows already serve as precedent for the next audit's calibration (Step 0). Every keyword stays in the file for good, bloats it, and risks a false positive on some future row. When in doubt, leave it out.
 - The **longest** matching keyword wins, in whichever category it sits; file order only breaks ties. So a specific keyword (`Whey Protein`, `AUTOPAY PAYMENT RECEIVED`) automatically beats a generic one (`Amazon`, `AUTOPAY`). Prefer specific, multi-word keywords, and treat a short generic one as a fallback.
 - Before adding a keyword, test it against verified history: the verified rows it matches (whole word, ignoring case) should already carry its category. Skip a keyword that contradicts them, or that would only re-assert the default category.
 
