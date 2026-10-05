@@ -53,8 +53,20 @@ ORDER BY date DESC
 ```
 
 ### Amazon returns
-Amazon refunds have descriptions like `"Amazon REFUND: <product>"`.
-Match against the original `"Amazon: <product>"` purchase by product name.
+Amazon refunds have descriptions like `"Amazon REFUND: <product>"`, but
+the product is cosmetic. It names whichever item of the order the
+export lists last, which may not be the item returned. Never match on
+it. Match by Order ID (`metadata.amazon_order_id`) instead.
+
+`housebook-audit link-amazon-refunds` links an order with one unlinked
+purchase line by itself. For a multi-line order, link by hand only
+when the refund equals exactly one unlinked line *of the same order*
+and no combination of its other lines adds up to it. For example, a
+-$35.00 refund on an order of $20.00 + $5.00 + $35.00 settles the
+$35.00 line, but on an order of $30.00 + $5.00 + $35.00 it could be
+two lines. Otherwise leave it for the user. A name match once linked
+a refund to a same-named item in a *different* order. That hid a real
+purchase that was never returned.
 
 ### Credit card credits
 Hotel/airline cancellations often appear as the same merchant with a
