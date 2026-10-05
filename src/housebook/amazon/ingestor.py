@@ -680,7 +680,15 @@ class AmazonIngestor(Ingestor):
         orders_map: dict[str, str],
         *, connection,
     ) -> List[Transaction]:
-        """One row per refund event; an order may have several.
+        """One row per refund payout; an order may have several.
+
+        The export repeats each payout once per return request of its
+        order: two requests and three payouts make six lines that
+        differ only in `Creation Date`. A payout is therefore its
+        order, its `Refund Date` timestamp (to the millisecond) and
+        its amount, and further lines carrying all three are copies.
+        Counting every line overstated such an order's refunds
+        several times over.
 
         The description borrows a product name from Order History, so
         it is cosmetic (see AGENTS.md "Refund-row schema quirks").
@@ -688,6 +696,7 @@ class AmazonIngestor(Ingestor):
         with open(path, "r", encoding="utf-8-sig") as f:
             reader = list(csv.DictReader(f))
         rows: List[_ExportRow] = []
+        payouts: set[tuple[str, str, Decimal]] = set()
         for i, row in enumerate(reader):
             try:
                 order_id = row["Order ID"]
@@ -701,6 +710,10 @@ class AmazonIngestor(Ingestor):
                 if amt_str.lower() == "not applicable" or not amt_str:
                     continue
                 amount = -Decimal(amt_str)
+                payout = (order_id, row["Refund Date"], amount)
+                if payout in payouts:
+                    continue
+                payouts.add(payout)
                 product = orders_map.get(order_id, "Unknown Product")
                 rows.append(_ExportRow(
                     order_id, row["Refund Date"].split("T")[0], amount,

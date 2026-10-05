@@ -44,7 +44,7 @@ an old `Cart History.csv`) simply stays, and ingest never reads it.
 | `Your Amazon Orders/Order History.csv` | Multi-*line* per Order ID (one row per shipment line) | One row per shipment line (no aggregation) |
 | `Your Amazon Orders/Digital Content Orders.csv` | Multi-*component* per Order ID (Price + Tax rows, plus Promotion/Coupon rows for discounts) | One row per Order ID, net = sum of `Transaction Amount` across the order's rows |
 | `Your Amazon Orders/Digital Returns.csv` | Multi-*component* per Order ID, mirror of Digital Content Orders | One row per Order ID, amount = -(sum of `Transaction Amount`) (refund credit ⇒ negative DB amount) |
-| `Your Returns & Refunds/Refund Details.csv` | One row per refund event | One row per refund |
+| `Your Returns & Refunds/Refund Details.csv` | Each payout repeated once per return request of its order | One row per payout (order, `Refund Date` timestamp, amount) |
 
 Each CSV is an independent database transaction. Its transaction rows,
 recoverable row-level errors, and `processed_files` marker commit
@@ -162,8 +162,20 @@ logistics fields (tracking IDs, dates) with no amounts.
 
 ## Refund-row schema quirks
 
-These two quirks govern how refund rows behave and must be respected
+These three quirks govern how refund rows behave and must be respected
 by any refund-matching logic:
+
+**Each payout is listed once per return request of its order.** The
+file crosses an order's return requests (`Creation Date`, `Quantity`)
+with its payouts (`Refund Date`, `Refund Amount`). An order with two
+requests and three payouts has six lines, and each payout appears
+twice with a different `Creation Date`. Ingest therefore identifies a
+payout by its order, its `Refund Date` timestamp (to the millisecond)
+and its amount, and skips further lines carrying all three. Two equal
+refunds paid at different moments still land as two rows. Before
+2026-10 every line was stored, so refunds on multi-return orders were
+overstated several times over. The overstatement was caught when an
+order's refunds came to more than the order cost.
 
 **Refund Details rows carry order-level amounts mis-attributed to
 one line.** A refund row labeled `"Amazon REFUND: USB Type C Cable"`

@@ -1055,6 +1055,49 @@ class TestAmazonExportIdentity(unittest.TestCase):
         self.assertEqual([t.amount for t in txs], [Decimal("-25.00")])
         self.assertEqual(counts["conflicts"], 0)
 
+    def _payouts(self, *rows):
+        """rows: (return request created, refunded at, amount)."""
+        self._write(
+            "Your Returns & Refunds/Refund Details.csv",
+            ["Creation Date", "Order ID", "Refund Date", "Currency",
+             "Refund Amount"],
+            [{"Creation Date": c, "Order ID": self.ORDER,
+              "Refund Date": r, "Currency": "USD", "Refund Amount": a}
+             for c, r, a in rows],
+        )
+
+    def test_payout_repeated_per_return_request_is_one_refund(self):
+        """The export lists every payout once per return request of
+        the order, so two requests and two payouts make four lines."""
+        self._orders((self.ORDER, "2025-08-01", "6.00", "Ally Mug"),
+                     (self.ORDER, "2025-08-01", "9.00", "Ally Coasters"))
+        paid = [("2025-08-20T15:01:02.345Z", "6.00"),
+                ("2025-08-20T15:01:09.876Z", "9.00")]
+        requests = ["2025-08-20T13:00:00.111Z", "2025-08-20T13:00:30.222Z"]
+        self._payouts(*[(c, r, a) for c in requests for r, a in paid])
+        txs, _ = self._ingest()
+        self.assertEqual(sorted(t.amount for t in txs if t.amount < 0),
+                         [Decimal("-9.00"), Decimal("-6.00")])
+        # A later export with a third request still holds two refunds.
+        requests.append("2025-08-21T09:00:00.333Z")
+        self._payouts(*[(c, r, a) for c in requests for r, a in paid])
+        txs, counts = self._ingest()
+        self.assertEqual(txs, [])
+        self.assertEqual(counts["conflicts"], 0)
+        self.assertEqual(len([r for r in self._rows() if r["amount"] < 0]),
+                         2)
+
+    def test_equal_payouts_at_different_times_are_two_refunds(self):
+        self._orders((self.ORDER, "2025-08-01", "7.00", "Buck Socks"),
+                     (self.ORDER, "2025-08-01", "7.00", "Buck Socks"))
+        self._payouts(
+            ("2025-08-20T13:00:00.111Z", "2025-08-20T15:01:02.345Z", "7.00"),
+            ("2025-08-20T13:05:00.222Z", "2025-08-20T15:06:04.567Z", "7.00"),
+        )
+        txs, _ = self._ingest()
+        self.assertEqual([t.amount for t in txs if t.amount < 0],
+                         [Decimal("-7.00"), Decimal("-7.00")])
+
     def test_identical_lines_land_and_stay_single(self):
         """Two identical lines are two rows, once, across exports."""
         line = (self.ORDER, "2025-07-01", "5.00", "Sterling Batteries")
