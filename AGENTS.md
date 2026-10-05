@@ -499,6 +499,12 @@ suite has no browser to catch them.
   `history.replaceState` fires no event. Back, Forward or an edited
   address therefore change the hash without reloading, and the page
   must re-read it.
+- **A category select offers the row's own category.** `categories`
+  lists only assignable categories (the keys of `rules.json`). A row
+  can still carry `Uncategorized` or `Transfers & Refunds`, and a
+  select bound to it adds that value as its first option. Otherwise
+  the browser shows an empty box. The spending filter likewise lists
+  every category present in the data (`filterCategories`).
 
 ### Dashboard asset build
 

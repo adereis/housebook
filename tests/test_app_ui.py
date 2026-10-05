@@ -5,6 +5,7 @@ has no browser. These tests read the template source instead and check
 the markup each behavior depends on, across every page, so a page
 added or edited later is held to the same rule.
 """
+import re
 import unittest
 from html.parser import HTMLParser
 
@@ -19,9 +20,20 @@ class _Tags(HTMLParser):
     def __init__(self):
         super().__init__()
         self.tags = []
+        self.options = []  # (select attrs, option attrs) pairs
+        self._select = None
 
     def handle_starttag(self, tag, attrs):
-        self.tags.append((tag, dict(attrs)))
+        attrs = dict(attrs)
+        self.tags.append((tag, attrs))
+        if tag == "select":
+            self._select = attrs
+        elif tag == "option" and self._select is not None:
+            self.options.append((self._select, attrs))
+
+    def handle_endtag(self, tag):
+        if tag == "select":
+            self._select = None
 
 
 def _parse(path):
@@ -107,6 +119,49 @@ class TestUrlState(unittest.TestCase):
                 self.assertTrue(
                     "addEventListener('hashchange'" in path.read_text(),
                     "writes the hash but never listens for hashchange")
+
+
+class TestCategorySelects(unittest.TestCase):
+    """A category select never shows blank for a row's own category."""
+
+    def test_row_category_selects_offer_the_current_category(self):
+        """`categories` lists only assignable categories.
+
+        A row can still carry another one, such as Uncategorized. A
+        select bound to it must offer that value, or the browser shows
+        an empty box.
+        """
+        bound = re.compile(r"^(\w+)\.category$")
+        found = 0
+        for path in _templates():
+            parser = _parse(path)
+            # Selects filled from the transaction category list and
+            # bound to a row; a tax document's list is a different one.
+            selects = [
+                select for select, option in parser.options
+                if option.get("v-for") == "cat in categories"
+                and bound.match(select.get(":value", ""))
+            ]
+            for select in selects:
+                found += 1
+                row = bound.match(select[":value"]).group(1)
+                guards = [
+                    option.get("v-if") for parent, option in parser.options
+                    if parent is select
+                ]
+                with self.subTest(template=path.name, row=row):
+                    self.assertIn(
+                        f"!categories.includes({row}.category)", guards)
+        self.assertGreater(found, 0, "no category select; check is stale")
+
+    def test_category_filter_offers_categories_found_in_the_data(self):
+        """The filter lists the rows' categories, not just assignable ones."""
+        parser = _parse(TEMPLATES / "spending.html")
+        options = [
+            option.get("v-for") for select, option in parser.options
+            if select.get("v-model") == "filters.category"
+        ]
+        self.assertIn("cat in filterCategories", options)
 
 
 if __name__ == "__main__":

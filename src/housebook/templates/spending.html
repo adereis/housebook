@@ -52,7 +52,7 @@
                            class="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-xs w-[160px] focus:border-blue-400 focus:outline-none">
                     <select aria-label="Filter by category" v-model="filters.category" class="bg-white border border-gray-300 rounded-lg px-2 py-1.5 text-xs">
                         <option value="">All Categories</option>
-                        <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
+                        <option v-for="cat in filterCategories" :key="cat" :value="cat">{{ cat }}</option>
                     </select>
                     <select aria-label="Filter by source" v-model="filters.source" class="bg-white border border-gray-300 rounded-lg px-2 py-1.5 text-xs">
                         <option value="">All Sources</option>
@@ -530,6 +530,7 @@
                             <select :value="selectedTx.category"
                                     @change="updateCategory(selectedTx, $event)"
                                     class="w-full bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm font-semibold focus:ring-2 focus:ring-blue-400 focus:border-blue-400">
+                                <option v-if="!categories.includes(selectedTx.category)" :value="selectedTx.category">⚠ {{ selectedTx.category }}</option>
                                 <option v-for="cat in categories" :key="cat" :value="cat">{{ cat }}</option>
                             </select>
                         </div>
@@ -841,6 +842,16 @@
                 });
 
                 const sources = computed(() => [...new Set(allTransactions.value.map(t => t.source))].sort());
+
+                // `categories` holds only what may be assigned (the rules
+                // file's keys). Rows can carry others, such as Uncategorized
+                // or Transfers & Refunds, and a filter must offer those too,
+                // or the select shows blank while it is filtering on one.
+                const filterCategories = computed(() => [...new Set([
+                    ...categories.value,
+                    ...allTransactions.value.map(t => t.category),
+                    filters.value.category,
+                ].filter(Boolean))].sort());
 
                 const hasActiveFilters = computed(() =>
                     filters.value.category || filters.value.search || filters.value.source || filters.value.tripId || filters.value.onlyReview
@@ -1378,7 +1389,7 @@
                     addingManual, editingExpense,
                     allTransactions, categories, tripsList, tripSummaries, workTripSummaries, manualExpenses,
                     filters, sortKey, sortDir, page, pageSize, newExpense, datePresets,
-                    activePreset, sources, hasActiveFilters, filteredTransactions, paginatedTransactions,
+                    activePreset, sources, filterCategories, hasActiveFilters, filteredTransactions, paginatedTransactions,
                     totalPages, visiblePages, stats, reviewCount,
                     filteredPersonalTrips, filteredWorkTrips,
                     monthlyManualCost, yearlyManualCost,
