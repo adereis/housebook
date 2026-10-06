@@ -14,9 +14,9 @@ When acting as an AI assistant on this repository, **you must follow this SOP:**
 2. **Pre-Flight Check (Status only):** Run `housebook-sync status` to view the sync dashboard — it shows database change counters (local/anchor/remote), the files changed on each side since this machine's last sync (`--verbose` lists them, renames paired), recent sync history with machine names, and a safety recommendation. Only proceed to pull if (a) the user explicitly requested a sync, or (b) there is a clear reason to believe the remote has newer data needed for the current task.
 3. **Pulling safely:** `housebook-sync pull` applies only the remote's changes (additions, edits, renames, deletions) and never touches this machine's own. Any file it replaces or deletes here moves to `data/backups/displaced-<time>/`. It refuses when the same file or the DB changed on both sides. `data/backups/` is never pulled. Do not pull unless there is a concrete reason.
 4. **Import:** The user provides file path(s) from any location. Follow the unified import SOP (`prompts/import.md`) to determine the source type, rename, create sidecars, and move files to `$WORKSPACE/<source>/YYYY/`. For Amazon zip exports, use `housebook-amazon import <path-to-zip> --profile <name>`. After import + user review, run `housebook-<source> ingest`.
-5. **Safety Check (Dry Run):** After successful execution, run `housebook-sync push --dry-run` and read the output. It marks each of this machine's changes `+` added, `~` modified, `-` deleted, or `>` renamed (old name → new name, sidecars paired with their documents). It lists separately any deletion whose content exists nowhere here.
+5. **Push only when the user asks.** Finishing an import, ingest, or audit is not a reason to push; report what changed and leave pushing to the user. When the user asks, first run `housebook-sync push --dry-run` and read the output. It marks each of this machine's changes `+` added, `~` modified, `-` deleted, or `>` renamed (old name → new name, sidecars paired with their documents). It lists separately any deletion whose content exists nowhere here.
 6. **Conflict Resolution & Push:**
-    - If the push will only update the SQLite database, JSON configs, and generated PDFs/reports, or rename or trash raw documents: run `housebook-sync push` autonomously.
+    - If the push will only update the SQLite database, JSON configs, and generated PDFs/reports, or rename or trash raw documents: run `housebook-sync push`.
     - If the dry run lists deletions that need confirmation (content that exists nowhere here): **STOP and ask the user**. Only after they confirm, re-run with `--allow-deletions`. A non-interactive push refuses those deletions by itself.
     - If a sync **refuses** (the same file or the DB changed on both sides, or this machine has no anchor yet): **STOP and ask**. Never reach for `--force` on your own; it discards one side's version.
 
@@ -79,8 +79,9 @@ housebook-audit add-manual "Workmanship" --amount 9500 \
 housebook-audit edit-project <id> --budget N --start … --end …   # Amend a project
 housebook-audit projects                        # Open projects: spend vs budget
 
-# 5. Sync back to Drive (merges; stops on a same-file conflict)
-housebook-sync
+# 5. Push to Drive, only when the user asks (SOP steps 5-6 above)
+housebook-sync push --dry-run   # Preview this machine's changes
+housebook-sync push
 ```
 
 `housebook-sync` with no arguments pulls the remote's changes, then
