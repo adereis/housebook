@@ -287,10 +287,9 @@ entry — the log never records a change that did not happen.
 ## Ingest atomicity
 
 Each sidecar runs inside one `Database.transaction()`: expense rows,
-document rows, and `processed_files` commit together. The original
-reproduction—two successful items followed by an invalid third
-amount—now leaves all three tables unchanged; correcting the sidecar
-and retrying writes exactly three expense/document pairs. Success
+document rows, and `processed_files` commit together. A failure on any
+item leaves all three tables unchanged, and a retry after fixing the
+sidecar writes the whole set. Success
 messages are buffered until commit so rolled-back items are never
 reported as durable.
 
@@ -300,7 +299,7 @@ Candidate scoring and installment detection live in `hsa/matching.py`.
 They are pure transformations over expense/stub rows; `cmd_candidates`
 owns only the database query, provenance lookup, and human/JSON output.
 
-Candidate and installment matching now share the ingestor's
+Candidate and installment matching share the ingestor's
 `ProviderResolver`, including its longest substring-alias behavior.
 One resolver instance loads aliases and per-provider billing-lag config
 once per command, so matching cannot disagree with ingest or reread the
@@ -312,7 +311,7 @@ in the same call) and `check` use the same post-update projection and
 tolerance. `check` also reports links to transactions that no longer
 exist instead of dropping them through an inner join.
 
-`merge` and `merge-many` now share `_merge_expenses` for field,
+`merge` and `merge-many` share `_merge_expenses` for field,
 document, note, review-state, source-deletion, and audit-log updates.
 The command-specific guards remain explicit: one-to-one merge may
 combine service records, while one-to-many requires a CC stub feeding

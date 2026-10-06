@@ -644,8 +644,9 @@ We follow high-signal semantic commits with strict formatting for readability in
 - **Co-Authorship**: Commits implemented by an AI agent MUST include a
   trailing `Co-Authored-By:` line identifying the agent that actually
   authored them — attribute honestly, do not hard-code one vendor.
-  Examples: `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
-  or `Co-Authored-By: Gemini CLI <gemini-cli@google.com>`.
+  Use the model name the harness reports, e.g.
+  `Co-Authored-By: Claude <model> <noreply@anthropic.com>` or
+  `Co-Authored-By: Gemini CLI <gemini-cli@google.com>`.
 
 ### Testing & Validation
 - **Requirement**: Run `./test.sh` before every commit.
@@ -676,19 +677,19 @@ We follow high-signal semantic commits with strict formatting for readability in
 - **Audit commands scope to recent data — mind it on backfills**: several
   commands limit their scope by default, which is correct for a *monthly*
   audit but would be misleading when **back-filling historical statements**.
-  Each command now **echoes its effective scope** in its output and accepts
-  an opt-in widening flag, but the defaults are unchanged — read the footer.
+  Each command **echoes its effective scope** in its output and accepts
+  an opt-in widening flag — read the footer.
   The mechanisms differ (do not conflate them):
   - `apply-rules` — **365-day date window** (`date >= one_year_ago`) by
-    default; on an old backfill it categorizes almost nothing. It now prints
+    default; on an old backfill it categorizes almost nothing. It prints
     the floor date and the count of older rows skipped. Widen with
     `--since YYYY-MM-DD` or `--all` (no floor — full backfill pass).
-  - `detect-trips` — **`--months` look-back** (default 12), now echoed in the
+  - `detect-trips` — **`--months` look-back** (default 12), echoed in the
     header (`Scanning the last N months (since …)`); finds no old clusters
     unless widened with `--months N`.
   - `housebook-audit trips` / `trips --json` — **`--limit` count cap**
     (default 10), newest-first by `start_date`. This is *not* a date filter:
-    older trips are simply truncated. The human output now prints
+    older trips are simply truncated. The human output prints
     `Showing X of N trips …` so the truncation is visible. Use `--limit 0`
     (or `--all`) for the whole table, or the overlap filters `--year YYYY` /
     `--since` / `--until` to pull just the slice a backfill needs.

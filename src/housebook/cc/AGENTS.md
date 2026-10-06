@@ -186,5 +186,5 @@ The CC *ingestor* does NOT categorize — it is constructed with no
 `Intelligence` and writes the sidecar's category or `Uncategorized`.
 This has consequences for how `CC Payment` rows (excluded from
 spending views) get set. See the **Spending View Filters** section
-in the root `AGENTS.md` for the full lifecycle and its two traps
-(the 365-day `apply-rules` window and the wording/category mismatch).
+in the root `AGENTS.md` for the full lifecycle and its trap
+(the 365-day `apply-rules` window).
