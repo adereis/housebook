@@ -64,8 +64,8 @@ row's identity is its **Order ID, date and amount**, within its CSV
 kind (`metadata.csv`) and profile. The description is never part of
 the key, because Amazon rewords it between exports:
 
-- Products get renamed. In 2026-10 a streaming add-on took a new
-  name on every past monthly charge.
+- Products get renamed, and a recurring charge can take a new name
+  on every past month at once.
 - A refund's description names whichever item of a multi-item order
   the export lists last, so reordered lines rename the refund.
 

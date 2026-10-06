@@ -92,8 +92,7 @@ well outside the grace.
 
 The ledger has no currency column, and every view and total sums
 `transactions.amount` as dollars. A foreign statement is therefore
-converted **at ingest**, not stored in its own currency. Added
-2026-10, first for a card billed in Brazilian reais.
+converted **at ingest**, not stored in its own currency.
 
 - The sidecar keeps the statement's own amounts and balances, so the
   import SOP's balance check still holds in that currency.

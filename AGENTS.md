@@ -593,8 +593,8 @@ Agent review step and produces unreliable data.
   **Commit messages and design notes are published too.** The honest
   *why* of a change is often a household event, such as a trip, a family
   visit or a prescription. Describe the problem's shape instead of the
-  event. Write "a card billed in a foreign currency", not "the family
-  trip to Brazil". Write "one traveler arrived before the rest", not who
+  event. Write "a card billed in a foreign currency", not the trip that
+  produced the charge. Write "one traveler arrived before the rest", not who
   arrived when. Leave out counts, dates, places, people and subscriptions
   taken from the workspace. Health details stay private even one at a
   time: a condition, a drug, a provider's name, or how often someone
