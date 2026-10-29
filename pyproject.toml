@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "housebook"
 version = "0.1.0"
-description = "A household ledger run by your AI coding agent: statements, receipts and tax forms in, an audited SQLite ledger out"
+description = "A private household ledger run by your AI coding agent (Claude Code, Codex, Gemini CLI). Card statements, Amazon orders, tax forms and medical receipts in; a local dashboard of spending, trip costs, HSA reimbursements and tax estimates out."
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [
